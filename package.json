@@ -27,27 +27,26 @@ const command = new SlashCommandBuilder()
 client.once("ready", async () => {
   console.log(`✅ Imperial CZ/SK je online jako ${client.user.tag}`);
 
-  const guilds = client.guilds.cache;
-
-  for (const guild of guilds.values()) {
+  for (const guild of client.guilds.cache.values()) {
     try {
       const rest = new REST({ version: "10" }).setToken(TOKEN);
 
       await rest.put(
         Routes.applicationGuildCommands(client.user.id, guild.id),
-        { body: [command.toJSON()] }
+        {
+          body: [command.toJSON()]
+        }
       );
 
       console.log(`✅ /setup zaregistrován na serveru ${guild.name}`);
     } catch (error) {
-      console.error(`❌ Chyba registrace příkazu:`, error);
+      console.error("❌ Chyba registrace příkazu:", error);
     }
   }
 });
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-
   if (interaction.commandName !== "setup") return;
 
   if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -93,12 +92,14 @@ client.on("interactionCreate", async (interaction) => {
   ];
 
   for (const [name, color] of roles) {
-    const exists = guild.roles.cache.find(role => role.name === name);
+    const exists = guild.roles.cache.find(
+      role => role.name === name
+    );
 
     if (!exists) {
       await guild.roles.create({
-        name,
-        color,
+        name: name,
+        color: color,
         reason: "Imperial CZ/SK automatický setup"
       });
     }
@@ -123,7 +124,7 @@ client.on("interactionCreate", async (interaction) => {
 
     if (!exists) {
       await guild.channels.create({
-        name,
+        name: name,
         type: ChannelType.GuildCategory
       });
     }
