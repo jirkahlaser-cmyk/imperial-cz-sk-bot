@@ -1,4 +1,3 @@
-```js
 const {
   Client,
   GatewayIntentBits,
@@ -18,8 +17,17 @@ const fs = require("fs");
 const path = require("path");
 
 // =====================================================
-// CONFIG
+// CLIENT
 // =====================================================
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
 
 const TOKEN = process.env.DISCORD_TOKEN;
 
@@ -28,57 +36,50 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages
-  ]
-});
-
 // =====================================================
 // DATA
 // =====================================================
 
-const dataFile = path.join(__dirname, "staff-hours.json");
+const DATA_FILE = path.join(__dirname, "staff-hours.json");
 
-let staffData = {
-  users: {}
+let data = {
+  users: {},
+  raid: {}
 };
 
 function loadData() {
   try {
-    if (fs.existsSync(dataFile)) {
-      staffData = JSON.parse(
-        fs.readFileSync(dataFile, "utf8")
-      );
+    if (fs.existsSync(DATA_FILE)) {
+      data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     }
 
-    if (!staffData.users) {
-      staffData.users = {};
-    }
+    if (!data.users) data.users = {};
+    if (!data.raid) data.raid = {};
 
   } catch (error) {
-    console.error("❌ Chyba při načítání staff-hours.json:", error);
-    staffData = { users: {} };
+    console.error("❌ Chyba při načítání dat:", error);
+    data = {
+      users: {},
+      raid: {}
+    };
   }
 }
 
 function saveData() {
   try {
     fs.writeFileSync(
-      dataFile,
-      JSON.stringify(staffData, null, 2)
+      DATA_FILE,
+      JSON.stringify(data, null, 2)
     );
   } catch (error) {
-    console.error("❌ Chyba při ukládání staff-hours.json:", error);
+    console.error("❌ Chyba při ukládání dat:", error);
   }
 }
 
 loadData();
 
 // =====================================================
-// ROLES
+// ROLE
 // =====================================================
 
 const ROLE_CONFIG = [
@@ -132,16 +133,20 @@ const MANAGEMENT_ROLES = [
 ];
 
 // =====================================================
-// ROLE HELPERS
+// HELPERS
 // =====================================================
 
 function isStaff(member) {
+  if (!member || !member.roles) return false;
+
   return member.roles.cache.some(role =>
     STAFF_ROLES.includes(role.name)
   );
 }
 
 function isManagement(member) {
+  if (!member || !member.roles) return false;
+
   return member.roles.cache.some(role =>
     MANAGEMENT_ROLES.includes(role.name)
   );
@@ -163,6 +168,95 @@ async function getOrCreateRole(guild, name, color) {
   return role;
 }
 
+async function getOrCreateCategory(
+  guild,
+  name,
+  overwrites = []
+) {
+  let category = guild.channels.cache.find(
+    c =>
+      c.type === ChannelType.GuildCategory &&
+      c.name === name
+  );
+
+  if (!category) {
+    category = await guild.channels.create({
+      name,
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: overwrites
+    });
+  }
+
+  if (overwrites.length) {
+    try {
+      await category.permissionOverwrites.set(
+        overwrites
+      );
+    } catch {}
+  }
+
+  return category;
+}
+
+async function getOrCreateChannel(
+  guild,
+  name,
+  parent,
+  overwrites = []
+) {
+  let channel = guild.channels.cache.find(
+    c =>
+      c.type === ChannelType.GuildText &&
+      c.name === name
+  );
+
+  if (!channel) {
+    channel = await guild.channels.create({
+      name,
+      type: ChannelType.GuildText,
+      parent: parent.id,
+      permissionOverwrites: overwrites
+    });
+  } else {
+    if (channel.parentId !== parent.id) {
+      try {
+        await channel.setParent(parent.id);
+      } catch {}
+    }
+
+    if (overwrites.length) {
+      try {
+        await channel.permissionOverwrites.set(
+          overwrites
+        );
+      } catch {}
+    }
+  }
+
+  return channel;
+}
+
+async function sendOnce(channel, content) {
+  try {
+    const messages = await channel.messages.fetch({
+      limit: 20
+    });
+
+    const existing = messages.find(
+      m => m.author.id === client.user.id
+    );
+
+    if (!existing) {
+      await channel.send(content);
+    }
+  } catch (error) {
+    console.error(
+      `❌ Chyba v kanálu ${channel.name}:`,
+      error.message
+    );
+  }
+}
+
 // =====================================================
 // PERMISSIONS
 // =====================================================
@@ -177,9 +271,9 @@ function staffPermissions(guild) {
     }
   ];
 
-  for (const roleName of STAFF_ROLES) {
+  for (const name of STAFF_ROLES) {
     const role = guild.roles.cache.find(
-      r => r.name === roleName
+      r => r.name === name
     );
 
     if (role) {
@@ -209,9 +303,9 @@ function managementPermissions(guild) {
     }
   ];
 
-  for (const roleName of MANAGEMENT_ROLES) {
+  for (const name of MANAGEMENT_ROLES) {
     const role = guild.roles.cache.find(
-      r => r.name === roleName
+      r => r.name === name
     );
 
     if (role) {
@@ -220,9 +314,7 @@ function managementPermissions(guild) {
         allow: [
           PermissionsBitField.Flags.ViewChannel,
           PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-          PermissionsBitField.Flags.AttachFiles,
-          PermissionsBitField.Flags.EmbedLinks
+          PermissionsBitField.Flags.ReadMessageHistory
         ]
       });
     }
@@ -231,386 +323,202 @@ function managementPermissions(guild) {
   return overwrites;
 }
 
-function publicPermissions(guild) {
-  return [
-    {
-      id: guild.roles.everyone.id,
-      allow: [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.ReadMessageHistory
-      ]
-    }
-  ];
-}
-
 // =====================================================
-// CHANNEL HELPERS
-// =====================================================
-
-async function getOrCreateCategory(
-  guild,
-  name,
-  permissionOverwrites
-) {
-  let category = guild.channels.cache.find(
-    channel =>
-      channel.type === ChannelType.GuildCategory &&
-      channel.name === name
-  );
-
-  if (!category) {
-    category = await guild.channels.create({
-      name,
-      type: ChannelType.GuildCategory,
-      permissionOverwrites
-    });
-  } else if (permissionOverwrites) {
-    await category.permissionOverwrites.set(
-      permissionOverwrites
-    );
-  }
-
-  return category;
-}
-
-async function getOrCreateChannel(
-  guild,
-  name,
-  parent,
-  permissionOverwrites
-) {
-  let channel = guild.channels.cache.find(
-    channel =>
-      channel.type === ChannelType.GuildText &&
-      channel.name === name
-  );
-
-  if (!channel) {
-    channel = await guild.channels.create({
-      name,
-      type: ChannelType.GuildText,
-      parent: parent.id,
-      permissionOverwrites
-    });
-  } else {
-    if (channel.parentId !== parent.id) {
-      await channel.setParent(parent.id);
-    }
-
-    if (permissionOverwrites) {
-      await channel.permissionOverwrites.set(
-        permissionOverwrites
-      );
-    }
-  }
-
-  return channel;
-}
-
-async function sendOnce(channel, content, options = {}) {
-  const messages = await channel.messages.fetch({
-    limit: 20
-  });
-
-  const botMessage = messages.find(
-    message =>
-      message.author.id === client.user.id
-  );
-
-  if (!botMessage) {
-    await channel.send({
-      content,
-      ...options
-    });
-  }
-}
-
-// =====================================================
-// TEXTS
+// TEXT
 // =====================================================
 
 const TEXT = {
 
-  rules: `
-📜 **PRAVIDLA DISCORD SERVERU — IMPERIAL CZ/SK**
+  welcome: `
+👑 **VÍTEJ NA IMPERIAL CZ/SK RP**
 
-👋 Vítej na našem Discord serveru!
+Vítej na našem Discord serveru.
+
+Imperial CZ/SK je RP komunita zaměřená na Emergency Hamburg v Robloxu.
+
+🎭 Naším cílem je vytvořit prostředí, kde má RP smysl, hráči spolupracují a pravidla platí pro všechny.
+
+🚓 Policie
+🚒 Hasiči
+🚑 Záchranáři
+🏢 Podniky
+🏠 Pozemky
+🎉 Eventy
+🛡️ Staff tým
+
+📢 Sleduj oznámení a informace na serveru.
+
+Užij si hru a hlavně kvalitní RP!
+`,
+
+  rules: `
+📜 **PRAVIDLA DISCORDU**
 
 1️⃣ Respektuj ostatní členy.
-2️⃣ Zákaz urážek, šikany a cíleného obtěžování.
-3️⃣ Zákaz spamu, floodu a zbytečného pingování.
-4️⃣ Zákaz reklamy bez povolení vedení.
-5️⃣ Nevydávej se za staff nebo jiného člena.
-6️⃣ Nesdílej osobní údaje ostatních.
-7️⃣ Nepoužívej NSFW obsah mimo povolená místa.
+2️⃣ Zákaz šikany a cíleného obtěžování.
+3️⃣ Zákaz spamu a floodu.
+4️⃣ Zákaz nevyžádané reklamy.
+5️⃣ Nevydávej se za staff.
+6️⃣ Nesdílej cizí osobní údaje.
+7️⃣ Nevyvolávej zbytečné konflikty.
 8️⃣ Dodržuj pravidla Discordu.
-9️⃣ Respektuj rozhodnutí staff týmu.
-🔟 Spory řeš přes ticket.
+9️⃣ Respektuj rozhodnutí moderace.
+🔟 Závažné problémy řeš přes ticket.
 
 ⚠️ Porušení pravidel může vést k warnu, timeoutu, kicku nebo banu.
-
-❤️ Hlavním cílem je vytvořit přátelskou komunitu pro hráče Emergency Hamburg.
 `,
 
   rpRules: `
-🎭 **RP PRAVIDLA — EMERGENCY HAMBURG**
-
-RP znamená RolePlay – hraní role své postavy realistickým způsobem.
-
-🔹 **RDM**
-Útok nebo zabití hráče bez odpovídajícího RP důvodu.
-
-🔹 **VDM**
-Používání vozidla jako zbraně bez RP důvodu.
+🎭 **RP PRAVIDLA**
 
 🔹 **FailRP**
-Nerealistické nebo nesmyslné jednání.
+Nerealistické nebo nesmyslné chování v RP.
 
-🔹 **Metagaming**
-Použití informací získaných mimo RP.
+🔹 **RDM**
+Napadení nebo zabití bez RP důvodu.
 
-🔹 **Powergaming**
-Vynucování nereálných akcí ostatním hráčům.
-
-🔹 **FearRP**
-Postava musí reagovat na reálné ohrožení života.
+🔹 **VDM**
+Použití vozidla jako zbraně bez RP důvodu.
 
 🔹 **NLR**
-Po smrti se hráč nemá vracet do předchozí situace.
+Po smrti se nesmíš bezdůvodně vracet do stejné situace.
+
+🔹 **Metagaming**
+Používání informací získaných mimo RP.
+
+🔹 **Powergaming**
+Nucení nereálných akcí druhému hráči.
+
+🔹 **FearRP**
+Při ohrožení života musí postava reagovat realisticky.
 
 🔹 **Combat Logging**
-Úmyslné odpojení během RP situace.
-
-🔹 **Revenge RP**
-Pomsta za událost, kterou si postava nemá pamatovat.
+Odpojení během probíhající RP situace.
 
 🔹 **Cop Baiting**
 Úmyslné nesmyslné provokování policie.
 
-🔹 **NVL**
-Ignorování hodnoty vlastního života.
+🔹 **Revenge RP**
+Pomsta za událost, kterou si postava nemá pamatovat.
 
-🎭 Hraj realisticky, komunikuj a respektuj ostatní hráče.
+🎭 Hraj realisticky a respektuj ostatní.
 `,
 
   applications: `
-📋 **PŘIHLÁŠKY DO STAFF TÝMU**
+📋 **NÁBOR DO STAFF TÝMU**
 
-👋 Chceš se stát součástí Imperial CZ/SK staff týmu?
+Chceš se stát součástí Imperial Staff Teamu?
 
-V přihlášce očekáváme:
+🛡️ Hledáme hlavně:
+• aktivní hráče
+• férové lidi
+• zkušené RP hráče
+• lidi schopné řešit konflikty
+• členy, kteří znají pravidla
 
-👤 Discord jméno
-🎮 Roblox jméno
-📅 Věk
-🕐 Aktivitu
-🧠 Zkušenosti se staff pozicí
-🎭 RP zkušenosti
-💡 Proč chceš být staff
-🛠️ Co můžeš serveru nabídnout
+📝 Přihlášku vytvoříš přes ticket.
 
-⭐ Nejvíce si vážíme aktivity, slušného jednání a schopnosti řešit konflikty.
+Každá přihláška se posuzuje individuálně.
 
-⚠️ Přihláška automaticky neznamená přijetí.
-
-👑 O přijetí rozhoduje vedení a příslušní členové staff týmu.
+⚠️ Lhaní v přihlášce může vést k zamítnutí.
 `,
 
   staffInfo: `
 🛡️ **STAFF INFO**
 
-Při řešení reportu:
+Staff musí být:
+• nestranný
+• aktivní
+• slušný
+• zodpovědný
+• důsledný
 
-1️⃣ Vyslechni všechny strany.
-2️⃣ Získej důkazy.
-3️⃣ Zachovej nestrannost.
-4️⃣ Zkontroluj pravidla.
-5️⃣ Rozhodni přiměřeně.
-6️⃣ Závažné případy zapiš.
-7️⃣ V případě pochybností kontaktuj Senior Admina.
-
-❌ Staff nesmí zneužívat pravomoci.
-❌ Staff nesmí zvýhodňovat kamarády.
-❌ Staff nesmí používat OORP informace pro vlastní výhodu.
-
-🛡️ Staff má být příkladem pro komunitu.
-`,
-
-  staffPunishments: `
-⚖️ **SYSTÉM TRESTŮ**
-
-🟢 UPOZORNĚNÍ
-Pro drobné nebo první porušení.
-
-🟡 WARN
-Pro opakované nebo závažnější porušení.
-
-🟠 TIMEOUT
-Pro toxicitu, spam nebo narušování komunity.
-
-🔴 KICK
-Pro závažné narušení serveru.
-
-⛔ TEMP BAN
-Pro závažné nebo opakované porušení.
-
-🚫 PERMANENT BAN
-Pro extrémně závažné případy.
-
-🛡️ ODEBRÁNÍ STAFF ROLE
-Při zneužití pravomocí.
-
-👑 PŘEDÁNÍ VEDENÍ
-U velmi závažných nebo sporných případů.
-
-⚠️ Trest musí vždy odpovídat situaci.
+📌 Při reportu:
+1. Vyslechni obě strany.
+2. Zkontroluj důkazy.
+3. Zkontroluj pravidla.
+4. Rozhodni nestranně.
+5. Závažné případy předávej Senior Adminovi.
 `,
 
   events: `
-🎉 **IMPERIAL EVENTY**
+🎉 **EVENTY**
 
-Na serveru budou probíhat pravidelné komunitní eventy.
+Na serveru mohou probíhat například:
 
 🚗 Car Meet
 🏁 Závody
 🚓 Policejní akce
-🚒 Hasičské zásahy
-🚑 Hromadné nehody
-🚨 Policejní honičky
-🏦 Bankovní loupeže
-💎 Loupeže klenotnictví
-🎭 Velké RP scénáře
-📸 Screenshot eventy
-🏆 Soutěže
+🚒 Hasičský zásah
+🚑 Hromadná nehoda
+🚨 Policejní honička
+🏦 Bankovní loupež
+💎 Loupež klenotnictví
+🚧 Dopravní uzavírka
+🎭 Velké městské RP
+🏆 Turnaje
+🎁 Soutěže
 
-📢 Každý event bude mít informace o:
-• času
-• místě
-• organizátorovi
-• pravidlech
-• scénáři
-`,
-
-  staffEvents: `
-🎉 **STAFF EVENTY**
-
-Tento kanál slouží k přípravě eventů před jejich zveřejněním.
-
-📋 U každého eventu určete:
-
-📅 Datum
-🕐 Čas
-📍 Místo
-👤 Organizátora
-🚓 Potřebné složky
-📝 Scénář
-⚖️ Pravidla
-👥 Předpokládaný počet hráčů
-
-💡 Event musí být připraven tak, aby byl férový a zábavný pro všechny.
+📢 Aktuální eventy budou zveřejněny zde.
 `,
 
   properties: `
 🏠 **POZEMKY**
 
-O pozemek se žádá přes ticket.
+Chceš vlastní RP pozemek?
 
-Do žádosti uveď:
+Vytvoř ticket a uveď:
 
 👤 Discord jméno
-🎮 Roblox jméno
 📍 Požadované místo
-🏠 Účel pozemku
-📸 Screenshot, pokud je potřeba
+🏠 Typ pozemku
+📝 Účel
+📸 Případný screenshot
 
 👑 Vedení žádost schválí nebo zamítne.
-
-⚠️ Discord evidence sama o sobě nemění vlastnictví v Robloxu.
 `,
 
   businesses: `
-🏢 **RP PODNIKY**
+🏢 **PODNIKY**
 
-Na serveru lze vytvořit například:
+Možné RP podniky:
 
-🍔 Restauraci
+🍔 Restaurace
 🔧 Autoservis
 🏪 Obchod
-⛽ Čerpací stanici
-🏢 Firmu
-🚕 Taxi službu
-
-O podnik se žádá přes ticket.
-
-Vedení může žádost:
-✅ schválit
-✏️ upravit
-❌ zamítnout
-`,
-
-  economy: `
-💰 **RP EKONOMIKA**
-
-Ekonomika slouží k rozvoji RP.
-
-💵 Peníze musí mít RP původ.
-🏢 Podniky musí být schválené.
-🏠 Pozemky se evidují přes vedení.
-🚫 Zákaz zneužívání systému.
-🚫 Zákaz OORP výhod.
-⚖️ Obchody musí být férové.
-
-🎭 Cílem není jen vydělávat, ale vytvářet kvalitní RP.
-`,
-
-  map: `
-🗺️ **EMERGENCY HAMBURG**
-
-Imperial CZ/SK využívá hru Emergency Hamburg v Robloxu.
-
-📍 Důležitá místa:
-
-🚓 Policie
-🚒 Hasiči
-🚑 ZZS
-🏦 Banka
-💎 Klenotnictví
 ⛽ Čerpací stanice
-🚉 Nádraží
-🏭 Průmyslové oblasti
-🏙️ Centrum
+🏢 Firma
 
-⚠️ Mapa a herní mechaniky se mohou měnit podle aktualizací hry.
+O podnik požádej přes ticket.
+
+Vedení může žádost schválit, upravit nebo zamítnout.
 `,
 
-  shift: `
-⏱️ **STAFF OORP SMĚNY**
+  shifts: `
+⏱️ **STAFF SMĚNY**
 
-Staff směny slouží k evidenci aktivity staff týmu.
-
-🟢 `/startshift`
+🟢 \`!startshift\`
 Začne směnu.
 
-🔴 `/endshift`
+🔴 \`!endshift\`
 Ukončí směnu.
 
-📊 `/shift`
-Zobrazí aktuální směnu.
+🟡 \`!shift\`
+Zobrazí aktivní směnu.
 
-🏆 `/myhours`
-Zobrazí celkový čas.
+🏆 \`!myhours\`
+Zobrazí tvůj čas.
 
-🥇 `/leaderboard`
-Zobrazí staff leaderboard.
+📊 \`!leaderboard\`
+Zobrazí leaderboard.
 
-⚠️ Čas se počítá od začátku do ukončení směny.
+⚠️ Směna se počítá pouze od startu do konce.
 `,
 
   ticket: `
-🎫 **IMPERIAL TICKET SYSTÉM**
+🎫 **TICKET SYSTÉM**
 
-Vyber důvod ticketu:
+Vyber si kategorii:
 
 🛠️ Podpora
 🚨 Report hráče
@@ -620,196 +528,80 @@ Vyber důvod ticketu:
 🔓 Unban
 🤝 Partnerství
 
-🛡️ Staff může ticket převzít.
-👑 Ticket lze předat vedení.
-🔒 Po vyřešení ticketu se ticket uzavře.
+🔒 Každý ticket vidí pouze autor a oprávněný staff.
 `
 };
 
 // =====================================================
-// SLASH COMMANDS
+// TIME SYSTEM
 // =====================================================
 
-const commands = [
-
-  new SlashCommandBuilder()
-    .setName("setup")
-    .setDescription("Nastaví celý Imperial CZ/SK server.")
-    .setDefaultMemberPermissions(
-      PermissionFlagsBits.Administrator
-    ),
-
-  new SlashCommandBuilder()
-    .setName("startshift")
-    .setDescription("Začne tvoji staff OORP směnu."),
-
-  new SlashCommandBuilder()
-    .setName("endshift")
-    .setDescription("Ukončí tvoji staff OORP směnu."),
-
-  new SlashCommandBuilder()
-    .setName("shift")
-    .setDescription("Zobrazí tvoji aktuální směnu."),
-
-  new SlashCommandBuilder()
-    .setName("myhours")
-    .setDescription("Zobrazí tvůj celkový staff čas."),
-
-  new SlashCommandBuilder()
-    .setName("leaderboard")
-    .setDescription("Zobrazí staff leaderboard.")
-].map(command => command.toJSON());
-
-// =====================================================
-// REGISTER COMMANDS
-// =====================================================
-
-async function registerCommands() {
-
-  const rest = new REST({
-    version: "10"
-  }).setToken(TOKEN);
-
-  for (const guild of client.guilds.cache.values()) {
-
-    try {
-
-      await rest.put(
-        Routes.applicationGuildCommands(
-          client.user.id,
-          guild.id
-        ),
-        {
-          body: commands
-        }
-      );
-
-      console.log(
-        `✅ Slash příkazy registrovány: ${guild.name}`
-      );
-
-    } catch (error) {
-
-      console.error(
-        `❌ Chyba registrace příkazů pro ${guild.name}:`,
-        error
-      );
-
-    }
-  }
-}
-
-// =====================================================
-// READY
-// =====================================================
-
-client.once("ready", async () => {
-
-  console.log(
-    `✅ Bot je online jako ${client.user.tag}`
-  );
-
-  await registerCommands();
-
-  console.log("🚀 Imperial CZ/SK bot je připraven.");
-});
-
-// =====================================================
-// TIME
-// =====================================================
-
-function formatTime(seconds) {
-
-  seconds = Math.max(
-    0,
-    Math.floor(seconds)
-  );
-
-  const hours = Math.floor(
-    seconds / 3600
-  );
-
-  const minutes = Math.floor(
-    (seconds % 3600) / 60
-  );
-
-  const secs = seconds % 60;
-
-  return `${hours} h ${minutes} min ${secs} s`;
-}
-
-function getCurrentShiftSeconds(user) {
-
-  if (!user.activeSince) {
-    return 0;
-  }
-
-  return Math.floor(
-    (Date.now() - user.activeSince) / 1000
-  );
-}
-
-// =====================================================
-// STAFF USER
-// =====================================================
-
-function getStaffUser(user) {
-
-  const id = user.id;
-
-  if (!staffData.users[id]) {
-
-    staffData.users[id] = {
+function getUserData(user) {
+  if (!data.users[user.id]) {
+    data.users[user.id] = {
       username: user.username,
       totalSeconds: 0,
       activeSince: null
     };
   }
 
-  staffData.users[id].username =
+  data.users[user.id].username =
     user.username;
 
-  return staffData.users[id];
+  return data.users[user.id];
 }
 
-// =====================================================
-// LEADERBOARD
-// =====================================================
+function formatTime(seconds) {
+  seconds = Math.max(
+    0,
+    Math.floor(seconds)
+  );
+
+  const hours =
+    Math.floor(seconds / 3600);
+
+  const minutes =
+    Math.floor(
+      (seconds % 3600) / 60
+    );
+
+  const secs =
+    seconds % 60;
+
+  return `${hours} h ${minutes} min ${secs} s`;
+}
+
+function getCurrentSeconds(userData) {
+  let seconds =
+    userData.totalSeconds || 0;
+
+  if (userData.activeSince) {
+    seconds += Math.floor(
+      (Date.now() -
+        userData.activeSince) / 1000
+    );
+  }
+
+  return seconds;
+}
 
 function createLeaderboard() {
-
-  const users = Object.entries(
-    staffData.users
-  )
-    .map(([id, data]) => {
-
-      let seconds =
-        Number(data.totalSeconds) || 0;
-
-      if (data.activeSince) {
-
-        seconds +=
-          getCurrentShiftSeconds(data);
-      }
-
-      return {
+  const users =
+    Object.entries(data.users)
+      .map(([id, user]) => ({
         id,
         username:
-          data.username || "Neznámý",
-        seconds
-      };
-    })
-    .sort(
-      (a, b) =>
-        b.seconds - a.seconds
-    );
+          user.username || "Neznámý",
+        seconds:
+          getCurrentSeconds(user)
+      }))
+      .sort(
+        (a, b) =>
+          b.seconds - a.seconds
+      );
 
-  if (users.length === 0) {
-
-    return (
-      "🏆 **STAFF LEADERBOARD**\n\n" +
-      "Zatím nejsou žádné evidované směny."
-    );
+  if (!users.length) {
+    return "Zatím nejsou žádné směny.";
   }
 
   const medals = [
@@ -818,769 +610,247 @@ function createLeaderboard() {
     "🥉"
   ];
 
-  let text =
-    "🏆 **STAFF OORP LEADERBOARD**\n\n";
-
-  users
+  return users
     .slice(0, 10)
-    .forEach((user, index) => {
-
+    .map((user, index) => {
       const medal =
         medals[index] ||
-        `${index + 1}.`;
+        `**${index + 1}.**`;
 
-      text +=
-        `${medal} **${user.username}** — ${formatTime(user.seconds)}\n`;
-    });
-
-  return text;
+      return `${medal} ${user.username} — **${formatTime(user.seconds)}**`;
+    })
+    .join("\n");
 }
 
 // =====================================================
-// LEADERBOARD CHANNEL
+// LOG
 // =====================================================
 
-async function updateLeaderboard(channel) {
-
-  const messages =
-    await channel.messages.fetch({
-      limit: 20
-    });
-
-  const botMessage =
-    messages.find(
-      message =>
-        message.author.id === client.user.id
-    );
-
-  const embed =
-    new EmbedBuilder()
-      .setTitle("🏆 STAFF OORP LEADERBOARD")
-      .setDescription(
-        createLeaderboard()
-      )
-      .setColor(0xffd700)
-      .setFooter({
-        text:
-          "Imperial CZ/SK • Aktualizace každou minutu"
-      })
-      .setTimestamp();
-
-  if (botMessage) {
-
-    await botMessage.edit({
-      embeds: [embed]
-    });
-
-  } else {
-
-    await channel.send({
-      embeds: [embed]
-    });
-  }
-}
-
-async function refreshLeaderboard(guild) {
-
+async function staffLog(guild, text) {
   const channel =
     guild.channels.cache.find(
       c =>
-        c.name ===
-        "🏆・staff-leaderboard"
+        c.name === "🛡️・staff-log"
     );
 
-  if (!channel) {
-    return;
-  }
+  if (!channel) return;
 
-  await updateLeaderboard(channel);
+  try {
+    await channel.send(text);
+  } catch {}
 }
 
 // =====================================================
-// STAFF LOG
+// RAID SYSTEM
 // =====================================================
 
-async function logStaff(guild, text) {
+async function lockServer(guild) {
+  if (data.raid[guild.id]) return;
 
-  const channel =
-    guild.channels.cache.find(
-      c =>
-        c.name ===
-        "🛡️・staff-log"
+  data.raid[guild.id] = {
+    locked: true,
+    channels: {}
+  };
+
+  for (const channel of guild.channels.cache.values()) {
+    if (
+      channel.type !== ChannelType.GuildText &&
+      channel.type !== ChannelType.GuildAnnouncement
+    ) {
+      continue;
+    }
+
+    try {
+      const everyone =
+        guild.roles.everyone;
+
+      const current =
+        channel.permissionOverwrites.cache.get(
+          everyone.id
+        );
+
+      data.raid[guild.id].channels[
+        channel.id
+      ] = current
+        ? {
+            allow:
+              current.allow.bitfield.toString(),
+            deny:
+              current.deny.bitfield.toString()
+          }
+        : null;
+
+      await channel.permissionOverwrites.edit(
+        everyone,
+        {
+          SendMessages: false,
+          AddReactions: false,
+          CreatePublicThreads: false,
+          CreatePrivateThreads: false
+        }
+      );
+    } catch {}
+  }
+
+  saveData();
+
+  await staffLog(
+    guild,
+    "🚨 **RAID LOCKDOWN AKTIVOVÁN**\n\nVšechny veřejné kanály byly dočasně uzamčeny."
+  );
+}
+
+async function unlockServer(guild) {
+  const raid =
+    data.raid[guild.id];
+
+  if (!raid) return;
+
+  for (const [channelId, permissions] of Object.entries(
+    raid.channels
+  )) {
+    const channel =
+      guild.channels.cache.get(
+        channelId
+      );
+
+    if (!channel) continue;
+
+    try {
+      if (permissions) {
+        await channel.permissionOverwrites.edit(
+          guild.roles.everyone,
+          {
+            SendMessages:
+              !BigInt(permissions.deny) &
+              BigInt(
+                PermissionsBitField.Flags.SendMessages
+              )
+          }
+        );
+      } else {
+        await channel.permissionOverwrites.delete(
+          guild.roles.everyone
+        );
+      }
+    } catch {}
+  }
+
+  delete data.raid[guild.id];
+
+  saveData();
+
+  await staffLog(
+    guild,
+    "🔓 **RAID LOCKDOWN UKONČEN**\n\nServer byl znovu odemčen."
+  );
+}
+
+// =====================================================
+// SETUP COMMAND
+// =====================================================
+
+const setupCommand =
+  new SlashCommandBuilder()
+    .setName("setup")
+    .setDescription(
+      "Nastaví Imperial CZ/SK RP server."
+    )
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.Administrator
     );
 
-  if (!channel) {
-    return;
+// =====================================================
+// RAID COMMAND
+// =====================================================
+
+const raidCommand =
+  new SlashCommandBuilder()
+    .setName("raid")
+    .setDescription(
+      "Správa ochrany proti raidu."
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("on")
+        .setDescription(
+          "Uzamkne server."
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("off")
+        .setDescription(
+          "Odemkne server."
+        )
+    );
+
+// =====================================================
+// READY
+// =====================================================
+
+client.once("clientReady", async () => {
+  console.log(
+    `✅ Bot je online jako ${client.user.tag}`
+  );
+
+  const rest =
+    new REST({
+      version: "10"
+    }).setToken(TOKEN);
+
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      await rest.put(
+        Routes.applicationGuildCommands(
+          client.user.id,
+          guild.id
+        ),
+        {
+          body: [
+            setupCommand.toJSON(),
+            raidCommand.toJSON()
+          ]
+        }
+      );
+
+      console.log(
+        `✅ Příkazy registrovány: ${guild.name}`
+      );
+    } catch (error) {
+      console.error(
+        `❌ Command error ${guild.name}:`,
+        error.message
+      );
+    }
   }
-
-  await channel.send({
-    embeds: [
-      new EmbedBuilder()
-        .setDescription(text)
-        .setColor(0x5865f2)
-        .setTimestamp()
-    ]
-  });
-}
-
-// =====================================================
-// MENTIONS
-// =====================================================
-
-function getStaffMentions(guild) {
-
-  return STAFF_ROLES
-    .map(name =>
-      guild.roles.cache.find(
-        role => role.name === name
-      )
-    )
-    .filter(Boolean)
-    .map(role =>
-      `<@&${role.id}>`
-    )
-    .join(" ");
-}
-
-function getManagementMentions(guild) {
-
-  return MANAGEMENT_ROLES
-    .map(name =>
-      guild.roles.cache.find(
-        role => role.name === name
-      )
-    )
-    .filter(Boolean)
-    .map(role =>
-      `<@&${role.id}>`
-    )
-    .join(" ");
-}
+});
 
 // =====================================================
 // SETUP
-// =====================================================
-
-async function setupServer(guild) {
-
-  // -----------------------------
-  // ROLES
-  // -----------------------------
-
-  for (const [name, color] of ROLE_CONFIG) {
-
-    await getOrCreateRole(
-      guild,
-      name,
-      color
-    );
-  }
-
-  const staffPerms =
-    staffPermissions(guild);
-
-  const managementPerms =
-    managementPermissions(guild);
-
-  const publicPerms =
-    publicPermissions(guild);
-
-  // =================================================
-  // INFORMACE
-  // =================================================
-
-  const info =
-    await getOrCreateCategory(
-      guild,
-      "📌 INFORMACE"
-    );
-
-  const rules =
-    await getOrCreateChannel(
-      guild,
-      "📜・pravidla",
-      info
-    );
-
-  const rpRules =
-    await getOrCreateChannel(
-      guild,
-      "🎭・rp-pravidla",
-      info
-    );
-
-  const faq =
-    await getOrCreateChannel(
-      guild,
-      "❓・faq",
-      info
-    );
-
-  const applications =
-    await getOrCreateChannel(
-      guild,
-      "📋・přihlášky",
-      info,
-      staffPerms
-    );
-
-  const announcements =
-    await getOrCreateChannel(
-      guild,
-      "📢・oznámení",
-      info
-    );
-
-  const map =
-    await getOrCreateChannel(
-      guild,
-      "🗺️・mapa-emergency",
-      info
-    );
-
-  // =================================================
-  // HRA
-  // =================================================
-
-  const game =
-    await getOrCreateCategory(
-      guild,
-      "🎮 HRA"
-    );
-
-  const properties =
-    await getOrCreateChannel(
-      guild,
-      "🏠・pozemky",
-      game
-    );
-
-  const businesses =
-    await getOrCreateChannel(
-      guild,
-      "🏢・podniky",
-      game
-    );
-
-  const economy =
-    await getOrCreateChannel(
-      guild,
-      "💰・ekonomika",
-      game
-    );
-
-  const police =
-    await getOrCreateChannel(
-      guild,
-      "🚓・policie",
-      game
-    );
-
-  const fire =
-    await getOrCreateChannel(
-      guild,
-      "🚒・hasiči",
-      game
-    );
-
-  const medic =
-    await getOrCreateChannel(
-      guild,
-      "🚑・záchranáři",
-      game
-    );
-
-  const criminal =
-    await getOrCreateChannel(
-      guild,
-      "🔫・kriminální-rp",
-      game
-    );
-
-  const traffic =
-    await getOrCreateChannel(
-      guild,
-      "🚗・dopravní-pravidla",
-      game
-    );
-
-  // =================================================
-  // KOMUNITA
-  // =================================================
-
-  const community =
-    await getOrCreateCategory(
-      guild,
-      "💬 KOMUNITA"
-    );
-
-  const chat =
-    await getOrCreateChannel(
-      guild,
-      "💬・chat",
-      community
-    );
-
-  const publicEvents =
-    await getOrCreateChannel(
-      guild,
-      "🎉・eventy",
-      community,
-      publicPerms
-    );
-
-  // =================================================
-  // STAFF
-  // =================================================
-
-  const staff =
-    await getOrCreateCategory(
-      guild,
-      "🛡️ STAFF",
-      staffPerms
-    );
-
-  const staffChat =
-    await getOrCreateChannel(
-      guild,
-      "🛡️・staff-chat",
-      staff,
-      staffPerms
-    );
-
-  const staffAnnouncements =
-    await getOrCreateChannel(
-      guild,
-      "📢・staff-oznámení",
-      staff,
-      staffPerms
-    );
-
-  const staffInfo =
-    await getOrCreateChannel(
-      guild,
-      "📋・staff-info",
-      staff,
-      staffPerms
-    );
-
-  const staffRP =
-    await getOrCreateChannel(
-      guild,
-      "📜・staff-rp-pravidla",
-      staff,
-      staffPerms
-    );
-
-  const staffPunishments =
-    await getOrCreateChannel(
-      guild,
-      "⚖️・staff-tresty",
-      staff,
-      staffPerms
-    );
-
-  const staffReports =
-    await getOrCreateChannel(
-      guild,
-      "🚨・staff-reporty",
-      staff,
-      staffPerms
-    );
-
-  const staffShifts =
-    await getOrCreateChannel(
-      guild,
-      "⏱️・staff-směny",
-      staff,
-      staffPerms
-    );
-
-  const leaderboard =
-    await getOrCreateChannel(
-      guild,
-      "🏆・staff-leaderboard",
-      staff,
-      staffPerms
-    );
-
-  const staffEvents =
-    await getOrCreateChannel(
-      guild,
-      "🎉・staff-eventy",
-      staff,
-      staffPerms
-    );
-
-  const staffMeetings =
-    await getOrCreateChannel(
-      guild,
-      "📅・staff-porady",
-      staff,
-      staffPerms
-    );
-
-  // =================================================
-  // TICKETY
-  // =================================================
-
-  const tickets =
-    await getOrCreateCategory(
-      guild,
-      "🎫 TICKETY"
-    );
-
-  const ticketPanel =
-    await getOrCreateChannel(
-      guild,
-      "🎫・vytvořit-ticket",
-      tickets
-    );
-
-  // =================================================
-  // VEDENÍ
-  // =================================================
-
-  const management =
-    await getOrCreateCategory(
-      guild,
-      "👑 VEDENÍ",
-      managementPerms
-    );
-
-  const managementChat =
-    await getOrCreateChannel(
-      guild,
-      "👑・vedení",
-      management,
-      managementPerms
-    );
-
-  const managementMeetings =
-    await getOrCreateChannel(
-      guild,
-      "📋・porady-vedení",
-      management,
-      managementPerms
-    );
-
-  // =================================================
-  // LOGY
-  // =================================================
-
-  const logs =
-    await getOrCreateCategory(
-      guild,
-      "📊 LOGY",
-      staffPerms
-    );
-
-  const ticketLogs =
-    await getOrCreateChannel(
-      guild,
-      "🎫・ticket-log",
-      logs,
-      staffPerms
-    );
-
-  const staffLogs =
-    await getOrCreateChannel(
-      guild,
-      "🛡️・staff-log",
-      logs,
-      staffPerms
-    );
-
-  // =================================================
-  // SEND TEXTS
-  // =================================================
-
-  await sendOnce(rules, TEXT.rules);
-  await sendOnce(rpRules, TEXT.rpRules);
-
-  await sendOnce(
-    faq,
-    `
-❓ **FAQ — IMPERIAL CZ/SK**
-
-🎫 Problém → vytvoř ticket.
-🚨 Report → použij report ticket.
-🏠 Pozemek → použij pozemkový ticket.
-🏢 Podnik → použij podnikový ticket.
-👮 Nábor → použij náborový ticket.
-🔓 Unban → použij unban ticket.
-🎉 Event → sleduj kanál eventů.
-🛡️ Staff → sleduj informace pro staff.
-`
-  );
-
-  await sendOnce(
-    applications,
-    TEXT.applications
-  );
-
-  await sendOnce(
-    announcements,
-    "📢 **OZNÁMENÍ IMPERIAL CZ/SK**\n\nDůležitá oznámení budou zveřejňována zde."
-  );
-
-  await sendOnce(map, TEXT.map);
-
-  await sendOnce(
-    properties,
-    TEXT.properties
-  );
-
-  await sendOnce(
-    businesses,
-    TEXT.businesses
-  );
-
-  await sendOnce(
-    economy,
-    TEXT.economy
-  );
-
-  await sendOnce(
-    police,
-    "🚓 **POLICIE**\n\nInformace, hodnosti a RP pravidla policejní složky."
-  );
-
-  await sendOnce(
-    fire,
-    "🚒 **HASIČI**\n\nInformace, hodnosti a RP pravidla hasičské složky."
-  );
-
-  await sendOnce(
-    medic,
-    "🚑 **ZÁCHRANÁŘI**\n\nInformace, hodnosti a RP pravidla ZZS."
-  );
-
-  await sendOnce(
-    criminal,
-    "🔫 **KRIMINÁLNÍ RP**\n\nKriminální RP musí být realistické a respektovat pravidla serveru."
-  );
-
-  await sendOnce(
-    traffic,
-    "🚗 **DOPRAVNÍ PRAVIDLA**\n\nRespektuj dopravní pravidla a používej vozidla realisticky."
-  );
-
-  await sendOnce(
-    chat,
-    "💬 **VÍTEJ V IMPERIAL CZ/SK!**\n\nUžij si komunitu, respektuj ostatní a hlavně si užij RP."
-  );
-
-  await sendOnce(
-    publicEvents,
-    TEXT.events
-  );
-
-  await sendOnce(
-    staffChat,
-    "🛡️ **STAFF CHAT**\n\nInterní komunikace staff týmu."
-  );
-
-  await sendOnce(
-    staffAnnouncements,
-    "📢 **STAFF OZNÁMENÍ**\n\nDůležitá interní oznámení."
-  );
-
-  await sendOnce(
-    staffInfo,
-    TEXT.staffInfo
-  );
-
-  await sendOnce(
-    staffRP,
-    "📜 **STAFF RP PRAVIDLA**\n\nStaff nesmí používat své pravomoci k vlastní RP výhodě."
-  );
-
-  await sendOnce(
-    staffPunishments,
-    TEXT.staffPunishments
-  );
-
-  await sendOnce(
-    staffReports,
-    `
-🚨 **STAFF REPORTY**
-
-👤 Hráč:
-🎮 Roblox:
-🕐 Datum:
-📝 Popis:
-📸 Důkazy:
-⚖️ Výsledek:
-👮 Staff:
-
-Závažné případy předávej Senior Adminovi nebo vedení.
-`
-  );
-
-  await sendOnce(
-    staffShifts,
-    TEXT.shift
-  );
-
-  await sendOnce(
-    staffEvents,
-    TEXT.staffEvents
-  );
-
-  await sendOnce(
-    staffMeetings,
-    `
-📅 **STAFF PORADY**
-
-Témata porad:
-
-• pravidla
-• nábor
-• eventy
-• stížnosti
-• aktivita staffu
-• nové funkce
-• problémy serveru
-`
-  );
-
-  await sendOnce(
-    managementChat,
-    "👑 **VEDENÍ IMPERIAL CZ/SK**\n\nInterní komunikace vedení."
-  );
-
-  await sendOnce(
-    managementMeetings,
-    "📋 **PORADY VEDENÍ**\n\nInterní plánování vedení."
-  );
-
-  await sendOnce(
-    ticketLogs,
-    "🎫 **TICKET LOG**"
-  );
-
-  await sendOnce(
-    staffLogs,
-    "🛡️ **STAFF LOG**"
-  );
-
-  // =================================================
-  // TICKET PANEL
-  // =================================================
-
-  const messages =
-    await ticketPanel.messages.fetch({
-      limit: 20
-    });
-
-  const hasPanel =
-    messages.some(
-      message =>
-        message.author.id === client.user.id
-    );
-
-  if (!hasPanel) {
-
-    const embed =
-      new EmbedBuilder()
-        .setTitle("🎫 IMPERIAL TICKET SYSTÉM")
-        .setDescription(
-          TEXT.ticket
-        )
-        .setColor(0x5865f2)
-        .setFooter({
-          text: "Imperial CZ/SK Support"
-        });
-
-    const row1 =
-      new ActionRowBuilder()
-        .addComponents(
-
-          new ButtonBuilder()
-            .setCustomId("ticket_support")
-            .setLabel("🛠️ Podpora")
-            .setStyle(ButtonStyle.Primary),
-
-          new ButtonBuilder()
-            .setCustomId("ticket_report")
-            .setLabel("🚨 Report")
-            .setStyle(ButtonStyle.Danger),
-
-          new ButtonBuilder()
-            .setCustomId("ticket_property")
-            .setLabel("🏠 Pozemek")
-            .setStyle(ButtonStyle.Success),
-
-          new ButtonBuilder()
-            .setCustomId("ticket_business")
-            .setLabel("🏢 Podnik")
-            .setStyle(ButtonStyle.Success)
-        );
-
-    const row2 =
-      new ActionRowBuilder()
-        .addComponents(
-
-          new ButtonBuilder()
-            .setCustomId("ticket_recruitment")
-            .setLabel("👮 Nábor")
-            .setStyle(ButtonStyle.Primary),
-
-          new ButtonBuilder()
-            .setCustomId("ticket_unban")
-            .setLabel("🔓 Unban")
-            .setStyle(ButtonStyle.Secondary),
-
-          new ButtonBuilder()
-            .setCustomId("ticket_partner")
-            .setLabel("🤝 Partnerství")
-            .setStyle(ButtonStyle.Secondary)
-        );
-
-    await ticketPanel.send({
-      embeds: [embed],
-      components: [
-        row1,
-        row2
-      ]
-    });
-  }
-
-  await updateLeaderboard(
-    leaderboard
-  );
-}
-
-// =====================================================
-// COMMAND HANDLER
 // =====================================================
 
 client.on(
   "interactionCreate",
   async interaction => {
 
-    if (!interaction.isChatInputCommand()) {
+    if (
+      !interaction.isChatInputCommand()
+    ) {
       return;
     }
-
-    // =================================================
-    // SETUP
-    // =================================================
 
     if (
       interaction.commandName === "setup"
     ) {
-
       if (
         !interaction.memberPermissions.has(
           PermissionFlagsBits.Administrator
         )
       ) {
-
         return interaction.reply({
           content:
-            "❌ Tento příkaz může použít pouze administrátor.",
+            "❌ Potřebuješ Administrator.",
           ephemeral: true
         });
       }
@@ -1590,26 +860,412 @@ client.on(
       });
 
       try {
+        const guild =
+          interaction.guild;
 
-        await setupServer(
-          interaction.guild
+        // ROLE
+        for (const [name, color] of ROLE_CONFIG) {
+          await getOrCreateRole(
+            guild,
+            name,
+            color
+          );
+        }
+
+        const staffPerms =
+          staffPermissions(guild);
+
+        const managementPerms =
+          managementPermissions(guild);
+
+        // INFORMACE
+        const info =
+          await getOrCreateCategory(
+            guild,
+            "📌 INFORMACE"
+          );
+
+        const welcome =
+          await getOrCreateChannel(
+            guild,
+            "👋・vítej",
+            info
+          );
+
+        const rules =
+          await getOrCreateChannel(
+            guild,
+            "📜・pravidla",
+            info
+          );
+
+        const rpRules =
+          await getOrCreateChannel(
+            guild,
+            "🎭・rp-pravidla",
+            info
+          );
+
+        const applications =
+          await getOrCreateChannel(
+            guild,
+            "📋・přihlášky",
+            info,
+            staffPerms
+          );
+
+        // HRA
+        const game =
+          await getOrCreateCategory(
+            guild,
+            "🎮 HRA"
+          );
+
+        const properties =
+          await getOrCreateChannel(
+            guild,
+            "🏠・pozemky",
+            game
+          );
+
+        const businesses =
+          await getOrCreateChannel(
+            guild,
+            "🏢・podniky",
+            game
+          );
+
+        const economy =
+          await getOrCreateChannel(
+            guild,
+            "💰・ekonomika",
+            game
+          );
+
+        // KOMUNITA
+        const community =
+          await getOrCreateCategory(
+            guild,
+            "💬 KOMUNITA"
+          );
+
+        const chat =
+          await getOrCreateChannel(
+            guild,
+            "💬・chat",
+            community
+          );
+
+        const events =
+          await getOrCreateChannel(
+            guild,
+            "🎉・eventy",
+            community
+          );
+
+        // STAFF
+        const staff =
+          await getOrCreateCategory(
+            guild,
+            "🛡️ STAFF",
+            staffPerms
+          );
+
+        const staffChat =
+          await getOrCreateChannel(
+            guild,
+            "🛡️・staff-chat",
+            staff,
+            staffPerms
+          );
+
+        const staffInfo =
+          await getOrCreateChannel(
+            guild,
+            "📋・staff-info",
+            staff,
+            staffPerms
+          );
+
+        const staffApplications =
+          await getOrCreateChannel(
+            guild,
+            "📝・staff-nábor",
+            staff,
+            staffPerms
+          );
+
+        const staffShifts =
+          await getOrCreateChannel(
+            guild,
+            "⏱️・staff-směny",
+            staff,
+            staffPerms
+          );
+
+        const leaderboard =
+          await getOrCreateChannel(
+            guild,
+            "🏆・staff-leaderboard",
+            staff,
+            staffPerms
+          );
+
+        const staffLogChannel =
+          await getOrCreateChannel(
+            guild,
+            "🛡️・staff-log",
+            staff,
+            staffPerms
+          );
+
+        // TICKETY
+        const tickets =
+          await getOrCreateCategory(
+            guild,
+            "🎫 TICKETY"
+          );
+
+        const ticketPanel =
+          await getOrCreateChannel(
+            guild,
+            "🎫・vytvořit-ticket",
+            tickets
+          );
+
+        // VEDENÍ
+        const management =
+          await getOrCreateCategory(
+            guild,
+            "👑 VEDENÍ",
+            managementPerms
+          );
+
+        const managementChat =
+          await getOrCreateChannel(
+            guild,
+            "👑・vedení",
+            management,
+            managementPerms
+          );
+
+        // TEXTY
+        await sendOnce(
+          welcome,
+          TEXT.welcome
+        );
+
+        await sendOnce(
+          rules,
+          TEXT.rules
+        );
+
+        await sendOnce(
+          rpRules,
+          TEXT.rpRules
+        );
+
+        await sendOnce(
+          applications,
+          TEXT.applications
+        );
+
+        await sendOnce(
+          events,
+          TEXT.events
+        );
+
+        await sendOnce(
+          properties,
+          TEXT.properties
+        );
+
+        await sendOnce(
+          businesses,
+          TEXT.businesses
+        );
+
+        await sendOnce(
+          chat,
+          "💬 **VÍTEJ V KOMUNITĚ**\n\nChovej se slušně a užij si RP."
+        );
+
+        await sendOnce(
+          economy,
+          "💰 **EKONOMIKA RP**\n\nVeškerá ekonomická aktivita musí mít RP původ."
+        );
+
+        await sendOnce(
+          staffChat,
+          "🛡️ **STAFF CHAT**\n\nInterní komunikace staff týmu."
+        );
+
+        await sendOnce(
+          staffInfo,
+          TEXT.staffInfo
+        );
+
+        await sendOnce(
+          staffApplications,
+          "📝 **STAFF NÁBOR**\n\nPřihlášky a hodnocení kandidátů."
+        );
+
+        await sendOnce(
+          staffShifts,
+          TEXT.shifts
+        );
+
+        await sendOnce(
+          managementChat,
+          "👑 **VEDENÍ SERVERU**\n\nInterní komunikace vedení."
+        );
+
+        await sendOnce(
+          staffLogChannel,
+          "🛡️ **STAFF LOG**\n\nAutomatické systémové záznamy."
+        );
+
+        // TICKET PANEL
+        const messages =
+          await ticketPanel.messages.fetch({
+            limit: 20
+          });
+
+        const panelExists =
+          messages.some(
+            m =>
+              m.author.id ===
+              client.user.id
+          );
+
+        if (!panelExists) {
+          const embed =
+            new EmbedBuilder()
+              .setTitle(
+                "🎫 IMPERIAL TICKET SYSTEM"
+              )
+              .setDescription(
+                TEXT.ticket
+              )
+              .setColor(0x5865f2)
+              .setFooter({
+                text:
+                  "Imperial CZ/SK • Support System"
+              });
+
+          const row =
+            new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_support"
+                  )
+                  .setLabel(
+                    "🛠️ Podpora"
+                  )
+                  .setStyle(
+                    ButtonStyle.Primary
+                  ),
+
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_report"
+                  )
+                  .setLabel(
+                    "🚨 Report"
+                  )
+                  .setStyle(
+                    ButtonStyle.Danger
+                  ),
+
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_property"
+                  )
+                  .setLabel(
+                    "🏠 Pozemek"
+                  )
+                  .setStyle(
+                    ButtonStyle.Success
+                  ),
+
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_business"
+                  )
+                  .setLabel(
+                    "🏢 Podnik"
+                  )
+                  .setStyle(
+                    ButtonStyle.Success
+                  )
+              );
+
+          const row2 =
+            new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_recruitment"
+                  )
+                  .setLabel(
+                    "👮 Nábor"
+                  )
+                  .setStyle(
+                    ButtonStyle.Primary
+                  ),
+
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_unban"
+                  )
+                  .setLabel(
+                    "🔓 Unban"
+                  )
+                  .setStyle(
+                    ButtonStyle.Secondary
+                  ),
+
+                new ButtonBuilder()
+                  .setCustomId(
+                    "ticket_partner"
+                  )
+                  .setLabel(
+                    "🤝 Partnerství"
+                  )
+                  .setStyle(
+                    ButtonStyle.Secondary
+                  )
+              );
+
+          await ticketPanel.send({
+            embeds: [embed],
+            components: [
+              row,
+              row2
+            ]
+          });
+        }
+
+        await updateLeaderboard(
+          leaderboard
         );
 
         await interaction.editReply(
-          "✅ **IMPERIAL CZ/SK SERVER JE NASTAVENÝ!**\n\n" +
-          "👑 Role → HOTOVO\n" +
-          "📌 Informace → HOTOVO\n" +
-          "🎮 RP → HOTOVO\n" +
-          "🛡️ Staff → HOTOVO\n" +
-          "🎫 Tickety → HOTOVO\n" +
-          "👑 Vedení → HOTOVO\n" +
-          "📊 Logy → HOTOVO\n" +
-          "⏱️ Směny → OPRAVENO\n" +
-          "🏆 Leaderboard → HOTOVO"
+          "✅ **IMPERIAL CZ/SK SETUP HOTOVÝ!**\n\n" +
+          "👑 Role: HOTOVO\n" +
+          "📌 Informace: HOTOVO\n" +
+          "🎮 RP kanály: HOTOVO\n" +
+          "🛡️ Staff systém: HOTOVO\n" +
+          "⏱️ Směny: HOTOVO\n" +
+          "🏆 Leaderboard: HOTOVO\n" +
+          "🎫 Tickety: HOTOVO\n" +
+          "👑 Vedení: HOTOVO\n" +
+          "🚨 Raid ochrana: HOTOVO\n\n" +
+          "🔥 Server je připraven."
         );
 
       } catch (error) {
-
         console.error(
           "❌ SETUP ERROR:",
           error
@@ -1617,7 +1273,7 @@ client.on(
 
         await interaction.editReply(
           "❌ Setup selhal.\n\n" +
-          "Zkontroluj Railway logy a oprávnění bota."
+          "Podívej se do Railway Logs."
         );
       }
 
@@ -1625,293 +1281,89 @@ client.on(
     }
 
     // =================================================
-    // STAFF COMMANDS
+    // RAID COMMAND
     // =================================================
 
-    const staffCommands = [
-      "startshift",
-      "endshift",
-      "shift",
-      "myhours",
-      "leaderboard"
-    ];
-
     if (
-      staffCommands.includes(
-        interaction.commandName
-      )
+      interaction.commandName ===
+      "raid"
     ) {
-
       if (
-        !interaction.guild
+        !interaction.memberPermissions.has(
+          PermissionFlagsBits.Administrator
+        )
       ) {
         return interaction.reply({
           content:
-            "❌ Tento příkaz lze použít pouze na serveru.",
+            "❌ Raid ochranu může ovládat pouze administrátor.",
           ephemeral: true
         });
       }
 
-      if (
-        !isStaff(interaction.member)
-      ) {
-        return interaction.reply({
-          content:
-            "❌ Tento příkaz je pouze pro STAFF.",
-          ephemeral: true
-        });
-      }
+      const action =
+        interaction.options.getSubcommand();
 
-      const user =
-        getStaffUser(
-          interaction.user
-        );
+      await interaction.deferReply({
+        ephemeral: true
+      });
 
-      // =================================================
-      // START SHIFT
-      // =================================================
-
-      if (
-        interaction.commandName ===
-        "startshift"
-      ) {
-
-        if (user.activeSince) {
-
-          const current =
-            getCurrentShiftSeconds(
-              user
-            );
-
-          return interaction.reply({
-            content:
-              `🟡 **Směnu už máš aktivní.**\n\n` +
-              `⏱️ Aktuálně: **${formatTime(current)}**`,
-            ephemeral: true
-          });
-        }
-
-        user.activeSince =
-          Date.now();
-
-        saveData();
-
-        await logStaff(
-          interaction.guild,
-          `🟢 ${interaction.user} zahájil staff směnu.`
-        );
-
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(
-                "🟢 STAFF SMĚNA ZAHÁJENA"
-              )
-              .setDescription(
-                `👤 **Staff:** ${interaction.user}\n\n` +
-                `🕐 **Začátek:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
-                `Použij **/endshift** až směnu ukončíš.`
-              )
-              .setColor(0x2ecc71)
-              .setTimestamp()
-          ]
-        });
-      }
-
-      // =================================================
-      // END SHIFT
-      // =================================================
-
-      if (
-        interaction.commandName ===
-        "endshift"
-      ) {
-
-        if (!user.activeSince) {
-
-          return interaction.reply({
-            content:
-              "🔴 **Nemáš aktivní směnu.**\n\nPoužij nejdříve `/startshift`.",
-            ephemeral: true
-          });
-        }
-
-        const seconds =
-          getCurrentShiftSeconds(
-            user
-          );
-
-        user.totalSeconds =
-          Number(user.totalSeconds || 0) +
-          seconds;
-
-        user.activeSince =
-          null;
-
-        saveData();
-
-        await refreshLeaderboard(
+      if (action === "on") {
+        await lockServer(
           interaction.guild
         );
 
-        await logStaff(
-          interaction.guild,
-          `🔴 ${interaction.user} ukončil staff směnu.\n⏱️ Délka: **${formatTime(seconds)}**`
+        return interaction.editReply(
+          "🚨 **RAID LOCKDOWN AKTIVOVÁN.**\n\nVeřejné kanály byly uzamčeny."
+        );
+      }
+
+      if (action === "off") {
+        await unlockServer(
+          interaction.guild
         );
 
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(
-                "🔴 STAFF SMĚNA UKONČENA"
-              )
-              .setDescription(
-                `👤 **Staff:** ${interaction.user}\n\n` +
-                `⏱️ **Tato směna:** ${formatTime(seconds)}\n` +
-                `🏆 **Celkem:** ${formatTime(user.totalSeconds)}`
-              )
-              .setColor(0xe74c3c)
-              .setTimestamp()
-          ]
-        });
-      }
-
-      // =================================================
-      // CURRENT SHIFT
-      // =================================================
-
-      if (
-        interaction.commandName ===
-        "shift"
-      ) {
-
-        if (!user.activeSince) {
-
-          return interaction.reply({
-            content:
-              "🔴 **Momentálně nemáš aktivní směnu.**",
-            ephemeral: true
-          });
-        }
-
-        const seconds =
-          getCurrentShiftSeconds(
-            user
-          );
-
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(
-                "⏱️ TVOJE AKTUÁLNÍ SMĚNA"
-              )
-              .setDescription(
-                `🟢 **Stav:** Aktivní\n\n` +
-                `⏱️ **Délka:** ${formatTime(seconds)}\n\n` +
-                `🕐 **Začátek:** <t:${Math.floor(user.activeSince / 1000)}:R>`
-              )
-              .setColor(0x2ecc71)
-              .setTimestamp()
-          ],
-          ephemeral: true
-        });
-      }
-
-      // =================================================
-      // MY HOURS
-      // =================================================
-
-      if (
-        interaction.commandName ===
-        "myhours"
-      ) {
-
-        let total =
-          Number(user.totalSeconds || 0);
-
-        if (user.activeSince) {
-
-          total +=
-            getCurrentShiftSeconds(
-              user
-            );
-        }
-
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(
-                "🏆 TVŮJ STAFF ČAS"
-              )
-              .setDescription(
-                `👤 **Staff:** ${interaction.user}\n\n` +
-                `⏱️ **Celkem:** ${formatTime(total)}`
-              )
-              .setColor(0xffd700)
-              .setTimestamp()
-          ],
-          ephemeral: true
-        });
-      }
-
-      // =================================================
-      // LEADERBOARD
-      // =================================================
-
-      if (
-        interaction.commandName ===
-        "leaderboard"
-      ) {
-
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(
-                "🏆 STAFF OORP LEADERBOARD"
-              )
-              .setDescription(
-                createLeaderboard()
-              )
-              .setColor(0xffd700)
-              .setTimestamp()
-          ]
-        });
+        return interaction.editReply(
+          "🔓 **RAID LOCKDOWN UKONČEN.**\n\nServer byl odemčen."
+        );
       }
     }
   }
 );
 
 // =====================================================
-// TICKET TYPES
+// TICKET SYSTEM
 // =====================================================
 
 const TICKET_TYPES = {
-
-  ticket_support:
-    ["podpora", "🛠️ Podpora"],
-
-  ticket_report:
-    ["report", "🚨 Report"],
-
-  ticket_property:
-    ["pozemek", "🏠 Pozemek"],
-
-  ticket_business:
-    ["podnik", "🏢 Podnik"],
-
-  ticket_recruitment:
-    ["nabor", "👮 Nábor"],
-
-  ticket_unban:
-    ["unban", "🔓 Unban"],
-
-  ticket_partner:
-    ["partnerstvi", "🤝 Partnerství"]
+  ticket_support: [
+    "podpora",
+    "🛠️ Podpora"
+  ],
+  ticket_report: [
+    "report",
+    "🚨 Report"
+  ],
+  ticket_property: [
+    "pozemek",
+    "🏠 Pozemek"
+  ],
+  ticket_business: [
+    "podnik",
+    "🏢 Podnik"
+  ],
+  ticket_recruitment: [
+    "nabor",
+    "👮 Nábor"
+  ],
+  ticket_unban: [
+    "unban",
+    "🔓 Unban"
+  ],
+  ticket_partner: [
+    "partnerstvi",
+    "🤝 Partnerství"
+  ]
 };
-
-// =====================================================
-// BUTTON HANDLER
-// =====================================================
 
 client.on(
   "interactionCreate",
@@ -1921,180 +1373,178 @@ client.on(
       return;
     }
 
-    // =================================================
-    // CREATE TICKET
-    // =================================================
-
     const type =
       TICKET_TYPES[
         interaction.customId
       ];
 
-    if (type) {
+    if (!type) {
+      return;
+    }
 
-      const guild =
-        interaction.guild;
+    const guild =
+      interaction.guild;
 
-      const category =
-        guild.channels.cache.find(
-          channel =>
-            channel.type ===
-              ChannelType.GuildCategory &&
-            channel.name ===
-              "🎫 TICKETY"
+    const category =
+      guild.channels.cache.find(
+        c =>
+          c.type ===
+            ChannelType.GuildCategory &&
+          c.name === "🎫 TICKETY"
+      );
+
+    if (!category) {
+      return interaction.reply({
+        content:
+          "❌ Nejdřív použij `/setup`.",
+        ephemeral: true
+      });
+    }
+
+    const channelName =
+      `${type[0]}-${interaction.user.id}`;
+
+    const existing =
+      guild.channels.cache.find(
+        c =>
+          c.name ===
+          channelName
+      );
+
+    if (existing) {
+      return interaction.reply({
+        content:
+          `❌ Už máš ticket: ${existing}`,
+        ephemeral: true
+      });
+    }
+
+    const overwrites = [
+      {
+        id: guild.roles.everyone.id,
+        deny: [
+          PermissionsBitField.Flags.ViewChannel
+        ]
+      },
+
+      {
+        id: interaction.user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AttachFiles
+        ]
+      }
+    ];
+
+    for (const name of STAFF_ROLES) {
+      const role =
+        guild.roles.cache.find(
+          r => r.name === name
         );
 
-      if (!category) {
-
-        return interaction.reply({
-          content:
-            "❌ Ticket kategorie neexistuje. Použij `/setup`.",
-          ephemeral: true
-        });
-      }
-
-      const channelName =
-        `${type[0]}-${interaction.user.id}`;
-
-      const existing =
-        guild.channels.cache.find(
-          channel =>
-            channel.name ===
-            channelName
-        );
-
-      if (existing) {
-
-        return interaction.reply({
-          content:
-            `❌ Už máš otevřený ticket: ${existing}`,
-          ephemeral: true
-        });
-      }
-
-      const overwrites = [
-
-        {
-          id: guild.roles.everyone.id,
-          deny: [
-            PermissionsBitField.Flags.ViewChannel
-          ]
-        },
-
-        {
-          id: interaction.user.id,
+      if (role) {
+        overwrites.push({
+          id: role.id,
           allow: [
             PermissionsBitField.Flags.ViewChannel,
             PermissionsBitField.Flags.SendMessages,
             PermissionsBitField.Flags.ReadMessageHistory,
-            PermissionsBitField.Flags.AttachFiles,
-            PermissionsBitField.Flags.EmbedLinks
+            PermissionsBitField.Flags.AttachFiles
           ]
-        }
-      ];
-
-      for (
-        const roleName
-        of STAFF_ROLES
-      ) {
-
-        const role =
-          guild.roles.cache.find(
-            r =>
-              r.name === roleName
-          );
-
-        if (role) {
-
-          overwrites.push({
-            id: role.id,
-            allow: [
-              PermissionsBitField.Flags.ViewChannel,
-              PermissionsBitField.Flags.SendMessages,
-              PermissionsBitField.Flags.ReadMessageHistory,
-              PermissionsBitField.Flags.AttachFiles,
-              PermissionsBitField.Flags.EmbedLinks
-            ]
-          });
-        }
-      }
-
-      const channel =
-        await guild.channels.create({
-          name: channelName,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          permissionOverwrites:
-            overwrites
         });
-
-      const embed =
-        new EmbedBuilder()
-          .setTitle(type[1])
-          .setDescription(
-            `👤 **Autor:** ${interaction.user}\n\n` +
-            `📝 Popiš svůj problém co nejpodrobněji.\n` +
-            `📸 Přilož důkazy, pokud je máš.\n\n` +
-            `🛡️ Staff může ticket převzít.\n` +
-            `👑 Ticket lze předat vedení.\n` +
-            `🔒 Po vyřešení ticket uzavři.`
-          )
-          .setColor(0x5865f2)
-          .setTimestamp();
-
-      const buttons =
-        new ActionRowBuilder()
-          .addComponents(
-
-            new ButtonBuilder()
-              .setCustomId(
-                "ticket_claim"
-              )
-              .setLabel("🛡️ Převzít")
-              .setStyle(
-                ButtonStyle.Primary
-              ),
-
-            new ButtonBuilder()
-              .setCustomId(
-                "ticket_management"
-              )
-              .setLabel(
-                "👑 Předat vedení"
-              )
-              .setStyle(
-                ButtonStyle.Secondary
-              ),
-
-            new ButtonBuilder()
-              .setCustomId(
-                "ticket_close"
-              )
-              .setLabel("🔒 Zavřít")
-              .setStyle(
-                ButtonStyle.Danger
-              )
-          );
-
-      await channel.send({
-        content:
-          `${interaction.user}\n${getStaffMentions(guild)}`,
-        embeds: [embed],
-        components: [buttons]
-      });
-
-      await interaction.reply({
-        content:
-          `✅ Ticket vytvořen: ${channel}`,
-        ephemeral: true
-      });
-
-      return;
+      }
     }
 
-    // =================================================
-    // TICKET ACTIONS
-    // =================================================
+    const channel =
+      await guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        parent: category.id,
+        permissionOverwrites:
+          overwrites
+      });
+
+    const embed =
+      new EmbedBuilder()
+        .setTitle(type[1])
+        .setDescription(
+          `👤 **Autor:** ${interaction.user}\n\n` +
+          "📝 Popiš svůj problém co nejpodrobněji.\n" +
+          "📸 Přilož důkazy, pokud je máš.\n\n" +
+          "🛡️ Staff se ti bude věnovat."
+        )
+        .setColor(0x5865f2)
+        .setFooter({
+          text:
+            "Imperial CZ/SK Support"
+        });
+
+    const buttons =
+      new ActionRowBuilder()
+        .addComponents(
+
+          new ButtonBuilder()
+            .setCustomId(
+              "ticket_claim"
+            )
+            .setLabel(
+              "🛡️ Převzít"
+            )
+            .setStyle(
+              ButtonStyle.Primary
+            ),
+
+          new ButtonBuilder()
+            .setCustomId(
+              "ticket_management"
+            )
+            .setLabel(
+              "👑 Vedení"
+            )
+            .setStyle(
+              ButtonStyle.Secondary
+            ),
+
+          new ButtonBuilder()
+            .setCustomId(
+              "ticket_close"
+            )
+            .setLabel(
+              "🔒 Zavřít"
+            )
+            .setStyle(
+              ButtonStyle.Danger
+            )
+        );
+
+    await channel.send({
+      content:
+        `${interaction.user}`,
+      embeds: [embed],
+      components: [buttons]
+    });
+
+    await interaction.reply({
+      content:
+        `✅ Ticket vytvořen: ${channel}`,
+      ephemeral: true
+    });
+  }
+);
+
+// =====================================================
+// TICKET ACTIONS
+// =====================================================
+
+client.on(
+  "interactionCreate",
+  async interaction => {
+
+    if (!interaction.isButton()) {
+      return;
+    }
 
     if (
       ![
@@ -2109,10 +1559,13 @@ client.on(
     }
 
     if (
-      !isStaff(interaction.member) &&
-      !isManagement(interaction.member)
+      !isStaff(
+        interaction.member
+      ) &&
+      !isManagement(
+        interaction.member
+      )
     ) {
-
       return interaction.reply({
         content:
           "❌ Tuto akci může použít pouze staff.",
@@ -2120,41 +1573,30 @@ client.on(
       });
     }
 
-    // CLAIM
-
     if (
       interaction.customId ===
       "ticket_claim"
     ) {
-
-      return interaction.reply({
-        content:
-          `🛡️ Ticket převzal ${interaction.user}.`
-      });
+      return interaction.reply(
+        `🛡️ Ticket převzal ${interaction.user}.`
+      );
     }
-
-    // MANAGEMENT
 
     if (
       interaction.customId ===
       "ticket_management"
     ) {
-
       for (
-        const roleName
-        of MANAGEMENT_ROLES
+        const name of MANAGEMENT_ROLES
       ) {
-
         const role =
           interaction.guild.roles.cache.find(
-            r =>
-              r.name === roleName
+            r => r.name === name
           );
 
         if (role) {
-
-          await interaction.channel
-            .permissionOverwrites.edit(
+          try {
+            await interaction.channel.permissionOverwrites.edit(
               role.id,
               {
                 ViewChannel: true,
@@ -2162,53 +1604,263 @@ client.on(
                 ReadMessageHistory: true
               }
             );
+          } catch {}
         }
       }
 
-      return interaction.reply({
-        content:
-          "👑 **Ticket byl předán vedení.**\n\n" +
-          getManagementMentions(
-            interaction.guild
-          )
-      });
+      return interaction.reply(
+        "👑 **Ticket byl předán vedení.**"
+      );
     }
-
-    // CLOSE
 
     if (
       interaction.customId ===
       "ticket_close"
     ) {
+      await interaction.reply(
+        "🔒 Ticket bude uzavřen za 5 sekund."
+      );
 
-      await interaction.reply({
-        content:
-          "🔒 **Ticket se zavře za 5 sekund.**"
-      });
+      setTimeout(async () => {
+        try {
+          await interaction.channel.delete(
+            "Ticket uzavřen"
+          );
+        } catch {}
+      }, 5000);
+    }
+  }
+);
 
-      setTimeout(
-        async () => {
+// =====================================================
+// SHIFT COMMANDS
+// =====================================================
 
-          try {
+client.on(
+  "messageCreate",
+  async message => {
 
-            await interaction.channel.delete(
-              "Ticket uzavřen"
-            );
+    if (
+      message.author.bot ||
+      !message.guild
+    ) {
+      return;
+    }
 
-          } catch (error) {
+    const command =
+      message.content
+        .trim()
+        .toLowerCase();
 
-            console.error(
-              "❌ Ticket delete:",
-              error
-            );
-          }
+    const allowed = [
+      "!startshift",
+      "!endshift",
+      "!shift",
+      "!myhours",
+      "!leaderboard"
+    ];
 
-        },
-        5000
+    if (!allowed.includes(command)) {
+      return;
+    }
+
+    if (
+      !isStaff(
+        message.member
+      )
+    ) {
+      return message.reply(
+        "❌ Tento příkaz je pouze pro staff."
+      );
+    }
+
+    const user =
+      getUserData(
+        message.author
+      );
+
+    // START
+    if (
+      command === "!startshift"
+    ) {
+      if (user.activeSince) {
+        return message.reply(
+          "🟡 **Už máš aktivní směnu.**"
+        );
+      }
+
+      user.activeSince =
+        Date.now();
+
+      saveData();
+
+      await message.reply(
+        "🟢 **SMĚNA ZAHÁJENA**\n\n" +
+        `👤 ${message.author}\n` +
+        `🕐 ${new Date().toLocaleString("cs-CZ")}\n\n` +
+        "Pro ukončení použij `!endshift`."
+      );
+
+      await staffLog(
+        message.guild,
+        `🟢 **SMĚNA START**\n👤 ${message.author.tag}`
+      );
+
+      return;
+    }
+
+    // END
+    if (
+      command === "!endshift"
+    ) {
+      if (!user.activeSince) {
+        return message.reply(
+          "🔴 **Nemáš aktivní směnu.**"
+        );
+      }
+
+      const seconds =
+        Math.floor(
+          (Date.now() -
+            user.activeSince) /
+            1000
+        );
+
+      user.totalSeconds =
+        (user.totalSeconds || 0) +
+        seconds;
+
+      user.activeSince =
+        null;
+
+      saveData();
+
+      await message.reply(
+        "🔴 **SMĚNA UKONČENA**\n\n" +
+        `⏱️ Tato směna: **${formatTime(seconds)}**\n` +
+        `🏆 Celkem: **${formatTime(user.totalSeconds)}**`
+      );
+
+      await staffLog(
+        message.guild,
+        `🔴 **SMĚNA END**\n👤 ${message.author.tag}\n⏱️ ${formatTime(seconds)}`
+      );
+
+      await refreshLeaderboard(
+        message.guild
+      );
+
+      return;
+    }
+
+    // STATUS
+    if (
+      command === "!shift"
+    ) {
+      if (!user.activeSince) {
+        return message.reply(
+          "🔴 **Nemáš aktivní směnu.**"
+        );
+      }
+
+      const seconds =
+        Math.floor(
+          (Date.now() -
+            user.activeSince) /
+            1000
+        );
+
+      return message.reply(
+        `🟢 **Aktivní směna:** ${formatTime(seconds)}`
+      );
+    }
+
+    // HOURS
+    if (
+      command === "!myhours"
+    ) {
+      return message.reply(
+        `🏆 **Tvůj staff čas:** ${formatTime(
+          getCurrentSeconds(user)
+        )}`
+      );
+    }
+
+    // LEADERBOARD
+    if (
+      command === "!leaderboard"
+    ) {
+      return message.reply(
+        `🏆 **STAFF LEADERBOARD**\n\n${createLeaderboard()}`
       );
     }
   }
 );
+
+// =====================================================
+// LEADERBOARD
+// =====================================================
+
+async function updateLeaderboard(channel) {
+  try {
+    const messages =
+      await channel.messages.fetch({
+        limit: 20
+      });
+
+    const botMessage =
+      messages.find(
+        m =>
+          m.author.id ===
+          client.user.id
+      );
+
+    const embed =
+      new EmbedBuilder()
+        .setTitle(
+          "🏆 IMPERIAL STAFF LEADERBOARD"
+        )
+        .setDescription(
+          createLeaderboard()
+        )
+        .setColor(0xffd700)
+        .setFooter({
+          text:
+            "Imperial CZ/SK • Aktualizace každou minutu"
+        })
+        .setTimestamp();
+
+    if (botMessage) {
+      await botMessage.edit({
+        embeds: [embed]
+      });
+    } else {
+      await channel.send({
+        embeds: [embed]
+      });
+    }
+  } catch (error) {
+    console.error(
+      "❌ Leaderboard error:",
+      error.message
+    );
+  }
+}
+
+async function refreshLeaderboard(guild) {
+  const channel =
+    guild.channels.cache.find(
+      c =>
+        c.name ===
+        "🏆・staff-leaderboard"
+    );
+
+  if (!channel) return;
+
+  await updateLeaderboard(
+    channel
+  );
+}
 
 // =====================================================
 // AUTO LEADERBOARD
@@ -2216,27 +1868,15 @@ client.on(
 
 setInterval(
   async () => {
-
     for (
-      const guild
-      of client.guilds.cache.values()
+      const guild of client.guilds.cache.values()
     ) {
-
       try {
-
         await refreshLeaderboard(
           guild
         );
-
-      } catch (error) {
-
-        console.error(
-          "❌ Automatický leaderboard:",
-          error
-        );
-      }
+      } catch {}
     }
-
   },
   60000
 );
@@ -2248,75 +1888,42 @@ setInterval(
 client.on(
   "guildMemberAdd",
   async member => {
-
-    const channel =
-      member.guild.channels.cache.find(
-        c =>
-          c.name ===
-          "🛡️・staff-log"
-      );
-
-    if (channel) {
-
-      await channel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              "📥 NOVÝ ČLEN"
-            )
-            .setDescription(
-              `👤 ${member.user.tag}\n` +
-              `🆔 ${member.id}`
-            )
-            .setColor(0x2ecc71)
-            .setTimestamp()
-        ]
-      });
-    }
+    await staffLog(
+      member.guild,
+      `📥 **NOVÝ ČLEN**\n👤 ${member.user.tag}\n🆔 ${member.id}`
+    );
   }
 );
 
 client.on(
   "guildMemberRemove",
   async member => {
-
-    const channel =
-      member.guild.channels.cache.find(
-        c =>
-          c.name ===
-          "🛡️・staff-log"
-      );
-
-    if (channel) {
-
-      await channel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(
-              "📤 ČLEN ODEŠEL"
-            )
-            .setDescription(
-              `👤 ${member.user.tag}\n` +
-              `🆔 ${member.id}`
-            )
-            .setColor(0xe74c3c)
-            .setTimestamp()
-        ]
-      });
-    }
+    await staffLog(
+      member.guild,
+      `📤 **ČLEN ODEŠEL**\n👤 ${member.user.tag}\n🆔 ${member.id}`
+    );
   }
 );
 
 // =====================================================
-// ERROR HANDLING
+// ERROR PROTECTION
 // =====================================================
+
+client.on(
+  "error",
+  error => {
+    console.error(
+      "❌ Discord Client Error:",
+      error
+    );
+  }
+);
 
 process.on(
   "unhandledRejection",
   error => {
-
     console.error(
-      "❌ UNHANDLED REJECTION:",
+      "❌ Unhandled Promise Rejection:",
       error
     );
   }
@@ -2325,9 +1932,8 @@ process.on(
 process.on(
   "uncaughtException",
   error => {
-
     console.error(
-      "❌ UNCAUGHT EXCEPTION:",
+      "❌ Uncaught Exception:",
       error
     );
   }
@@ -2338,4 +1944,3 @@ process.on(
 // =====================================================
 
 client.login(TOKEN);
-```
