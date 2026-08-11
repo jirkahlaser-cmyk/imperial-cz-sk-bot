@@ -1,1227 +1,810 @@
 const {
-    Client,
-    GatewayIntentBits,
-    Partials,
-    ChannelType,
-    PermissionFlagsBits,
-    EmbedBuilder,
-    ActionRowBuilder,
-    StringSelectMenuBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-    Events
+  Client,
+  GatewayIntentBits,
+  Partials,
+  ChannelType,
+  PermissionFlagsBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  SlashCommandBuilder,
+  REST,
+  Routes,
 } = require("discord.js");
 
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ],
-    partials: [Partials.Channel]
-});
+// ======================================================
+// IMPERIAL CZ/SK BOT - NOVÝ SERVER SETUP
+// ======================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
 
 if (!TOKEN) {
-    console.error("❌ Chybí DISCORD_TOKEN v Railway Variables.");
-    process.exit(1);
+  console.error("❌ Chybí DISCORD_TOKEN v Railway Variables.");
+  process.exit(1);
 }
 
-/* =========================================================
-   NASTAVENÍ
-========================================================= */
+if (!CLIENT_ID) {
+  console.error("❌ Chybí CLIENT_ID v Railway Variables.");
+  process.exit(1);
+}
 
-const CONFIG = {
-    categoryNames: {
-        INFO: "📌 INFORMACE",
-        COMMUNITY: "💬 KOMUNITA",
-        NOTIFICATIONS: "📢 OZNÁMENÍ",
-        TICKETS: "🎫 TICKETY",
-        STAFF: "🛡️ ADMIN TEAM",
-        MANAGEMENT: "🏛️ VEDENÍ",
-        PENALTIES: "⚖️ TRESTY",
-        VOICE: "🔊 VOICE"
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel],
+});
+
+// ======================================================
+// POMOCNÉ FUNKCE
+// ======================================================
+
+function channelPermissions(guild, options = {}) {
+  const everyone = guild.roles.everyone;
+
+  const overwrites = [
+    {
+      id: everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel],
     },
+  ];
 
-    roles: {
-        MEMBER: "Člen",
-        ADMIN: "Admin",
-        MANAGEMENT: "Vedení",
-        POLICE: "Policie",
-        FIRE: "Hasiči",
-        EMS: "Záchranka",
-        CIVIL: "Civilista"
-    }
-};
+  // MAJITEL SERVERU - VŽDY VŠUDE
+  overwrites.push({
+    id: guild.ownerId,
+    allow: [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.ReadMessageHistory,
+      PermissionFlagsBits.Connect,
+      PermissionFlagsBits.Speak,
+      PermissionFlagsBits.ManageChannels,
+      PermissionFlagsBits.ManageMessages,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.AttachFiles,
+    ],
+  });
 
-/* =========================================================
-   POMOCNÉ FUNKCE
-========================================================= */
+  if (options.roles) {
+    for (const role of options.roles) {
+      if (!role) continue;
 
-async function getOrCreateRole(guild, name, options = {}) {
-    let role = guild.roles.cache.find(r => r.name === name);
-
-    if (!role) {
-        role = await guild.roles.create({
-            name,
-            ...options,
-            reason: "Imperial CZ/SK Bot - vytvoření systému"
-        });
-
-        console.log(`✅ Role vytvořena: ${name}`);
-    }
-
-    return role;
-}
-
-async function getOrCreateCategory(guild, name) {
-    let category = guild.channels.cache.find(
-        c => c.type === ChannelType.GuildCategory && c.name === name
-    );
-
-    if (!category) {
-        category = await guild.channels.create({
-            name,
-            type: ChannelType.GuildCategory,
-            reason: "Imperial CZ/SK Bot - vytvoření serveru"
-        });
-
-        console.log(`✅ Kategorie vytvořena: ${name}`);
-    }
-
-    return category;
-}
-
-async function getOrCreateChannel(guild, name, type, parent, permissionOverwrites = []) {
-    let channel = guild.channels.cache.find(
-        c => c.name === name && c.type === type
-    );
-
-    if (!channel) {
-        channel = await guild.channels.create({
-            name,
-            type,
-            parent,
-            permissionOverwrites,
-            reason: "Imperial CZ/SK Bot - vytvoření kanálu"
-        });
-
-        console.log(`✅ Kanál vytvořen: ${name}`);
-    } else {
-        try {
-            await channel.setParent(parent.id, {
-                lockPermissions: false,
-                reason: "Imperial CZ/SK Bot - oprava struktury"
-            });
-
-            if (permissionOverwrites.length) {
-                await channel.permissionOverwrites.set(permissionOverwrites);
-            }
-        } catch (error) {
-            console.log(`⚠️ Nepodařilo se upravit ${name}:`, error.message);
-        }
-    }
-
-    return channel;
-}
-
-function everyoneDeny(guild) {
-    return {
-        id: guild.roles.everyone.id,
-        deny: [
-            PermissionFlagsBits.ViewChannel
-        ]
-    };
-}
-
-function everyoneReadOnly(guild) {
-    return {
-        id: guild.roles.everyone.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.ReadMessageHistory
-        ],
-        deny: [
-            PermissionFlagsBits.SendMessages
-        ]
-    };
-}
-
-function roleAllow(role) {
-    return {
+      overwrites.push({
         id: role.id,
         allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.Connect,
-            PermissionFlagsBits.Speak
-        ]
-    };
-}
-
-/* =========================================================
-   ROLE
-========================================================= */
-
-async function setupRoles(guild) {
-    const roles = {};
-
-    roles.member = await getOrCreateRole(guild, CONFIG.roles.MEMBER, {
-        color: 0x3498db,
-        mentionable: true
-    });
-
-    roles.admin = await getOrCreateRole(guild, CONFIG.roles.ADMIN, {
-        color: 0xe74c3c,
-        mentionable: true
-    });
-
-    roles.management = await getOrCreateRole(guild, CONFIG.roles.MANAGEMENT, {
-        color: 0x9b59b6,
-        mentionable: true
-    });
-
-    roles.police = await getOrCreateRole(guild, CONFIG.roles.POLICE, {
-        color: 0x2980b9,
-        mentionable: true
-    });
-
-    roles.fire = await getOrCreateRole(guild, CONFIG.roles.FIRE, {
-        color: 0xe67e22,
-        mentionable: true
-    });
-
-    roles.ems = await getOrCreateRole(guild, CONFIG.roles.EMS, {
-        color: 0x2ecc71,
-        mentionable: true
-    });
-
-    roles.civil = await getOrCreateRole(guild, CONFIG.roles.CIVIL, {
-        color: 0x95a5a6,
-        mentionable: true
-    });
-
-    return roles;
-}
-
-/* =========================================================
-   KANÁLY
-========================================================= */
-
-async function setupChannels(guild, roles) {
-    const categories = {};
-
-    for (const [key, name] of Object.entries(CONFIG.categoryNames)) {
-        categories[key] = await getOrCreateCategory(guild, name);
-    }
-
-    /* -----------------------------------------------------
-       INFORMACE
-    ----------------------------------------------------- */
-
-    await getOrCreateChannel(
-        guild,
-        "📜・pravidla",
-        ChannelType.GuildText,
-        categories.INFO,
-        [everyoneReadOnly(guild)]
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "🗺️・mapa",
-        ChannelType.GuildText,
-        categories.INFO,
-        [everyoneReadOnly(guild)]
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "🏠・domy",
-        ChannelType.GuildText,
-        categories.INFO,
-        [everyoneReadOnly(guild)]
-    );
-
-    /* -----------------------------------------------------
-       KOMUNITA
-    ----------------------------------------------------- */
-
-    await getOrCreateChannel(
-        guild,
-        "💬・chat",
-        ChannelType.GuildText,
-        categories.COMMUNITY
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "📸・media",
-        ChannelType.GuildText,
-        categories.COMMUNITY
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "🤖・bot-příkazy",
-        ChannelType.GuildText,
-        categories.COMMUNITY
-    );
-
-    /* -----------------------------------------------------
-       OZNÁMENÍ
-    ----------------------------------------------------- */
-
-    await getOrCreateChannel(
-        guild,
-        "🎉・eventy",
-        ChannelType.GuildText,
-        categories.NOTIFICATIONS,
-        [everyoneReadOnly(guild)]
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "📢・oznámení",
-        ChannelType.GuildText,
-        categories.NOTIFICATIONS,
-        [everyoneReadOnly(guild)]
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "🚨・rm-oznámení",
-        ChannelType.GuildText,
-        categories.NOTIFICATIONS,
-        [everyoneReadOnly(guild)]
-    );
-
-    /* -----------------------------------------------------
-       TICKETY
-    ----------------------------------------------------- */
-
-    const ticketChannel = await getOrCreateChannel(
-        guild,
-        "🎫・vytvořit-ticket",
-        ChannelType.GuildText,
-        categories.TICKETS,
-        [everyoneReadOnly(guild)]
-    );
-
-    await sendTicketPanel(ticketChannel);
-
-    /* -----------------------------------------------------
-       ADMIN TEAM
-    ----------------------------------------------------- */
-
-    const staffPermissions = [
-        everyoneDeny(guild),
-        roleAllow(roles.admin),
-        roleAllow(roles.management)
-    ];
-
-    const adminChat = await getOrCreateChannel(
-        guild,
-        "🛡️・admin-chat",
-        ChannelType.GuildText,
-        categories.STAFF,
-        staffPermissions
-    );
-
-    await adminChat.send({
-        embeds: [
-            new EmbedBuilder()
-                .setTitle("🛡️ ADMIN TEAM")
-                .setDescription(
-                    "Soukromý prostor pro Admin Team.\n\n" +
-                    "Diskutujte zde o moderaci, hráčích, RP situacích a dalších věcech."
-                )
-                .setColor(0xe74c3c)
-        ]
-    }).catch(() => {});
-
-    for (let i = 1; i <= 6; i++) {
-        await getOrCreateChannel(
-            guild,
-            `🔊・AT${i}`,
-            ChannelType.GuildVoice,
-            categories.STAFF,
-            staffPermissions
-        );
-    }
-
-    /* -----------------------------------------------------
-       VEDENÍ
-    ----------------------------------------------------- */
-
-    const managementPermissions = [
-        everyoneDeny(guild),
-        {
-            id: roles.management.id,
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory,
-                PermissionFlagsBits.Connect,
-                PermissionFlagsBits.Speak
-            ]
-        }
-    ];
-
-    await getOrCreateChannel(
-        guild,
-        "🏛️・vedení-chat",
-        ChannelType.GuildText,
-        categories.MANAGEMENT,
-        managementPermissions
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "🏛️・vedení-call",
-        ChannelType.GuildVoice,
-        categories.MANAGEMENT,
-        managementPermissions
-    );
-
-    /* -----------------------------------------------------
-       TRESTY
-    ----------------------------------------------------- */
-
-    const punishmentPermissions = [
-        everyoneDeny(guild),
-        roleAllow(roles.admin),
-        roleAllow(roles.management)
-    ];
-
-    const punishmentPanel = await getOrCreateChannel(
-        guild,
-        "⚖️・zápis-trestů",
-        ChannelType.GuildText,
-        categories.PENALTIES,
-        punishmentPermissions
-    );
-
-    await sendPunishmentPanel(punishmentPanel);
-
-    await getOrCreateChannel(
-        guild,
-        "⚠️・warny",
-        ChannelType.GuildText,
-        categories.PENALTIES,
-        punishmentPermissions
-    );
-
-    await getOrCreateChannel(
-        guild,
-        "🔨・bany",
-        ChannelType.GuildText,
-        categories.PENALTIES,
-        punishmentPermissions
-    );
-
-    console.log("✅ Kanály jsou připravené.");
-}
-
-/* =========================================================
-   TICKET PANEL
-========================================================= */
-
-async function sendTicketPanel(channel) {
-    const oldMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-
-    if (
-        oldMessages &&
-        oldMessages.some(m =>
-            m.author.id === client.user.id &&
-            m.components.length > 0
-        )
-    ) {
-        return;
-    }
-
-    const menu = new StringSelectMenuBuilder()
-        .setCustomId("ticket_type")
-        .setPlaceholder("🎫 Vyber typ ticketu")
-        .addOptions([
-            {
-                label: "Stížnost na admina",
-                value: "admin_complaint",
-                emoji: "🛡️"
-            },
-            {
-                label: "Mafie",
-                value: "mafia",
-                emoji: "🔫"
-            },
-            {
-                label: "Mafie 1",
-                value: "mafia1",
-                emoji: "1️⃣"
-            },
-            {
-                label: "Mafie 2",
-                value: "mafia2",
-                emoji: "2️⃣"
-            },
-            {
-                label: "Mafie 3",
-                value: "mafia3",
-                emoji: "3️⃣"
-            },
-            {
-                label: "Stížnost na hráče",
-                value: "player_complaint",
-                emoji: "👤"
-            },
-            {
-                label: "Žádost o unban",
-                value: "unban",
-                emoji: "🔓"
-            },
-            {
-                label: "Jiná žádost",
-                value: "other",
-                emoji: "📩"
-            }
-        ]);
-
-    const row = new ActionRowBuilder().addComponents(menu);
-
-    await channel.send({
-        embeds: [
-            new EmbedBuilder()
-                .setTitle("🎫 CENTRUM TICKETŮ")
-                .setDescription(
-                    "Potřebuješ něco vyřešit s vedením nebo Admin Teamem?\n\n" +
-                    "Vyber kategorii níže a vytvoř ticket.\n\n" +
-                    "⚠️ Ticket nezneužívej. Falešné nebo spamovací tickety mohou být potrestány."
-                )
-                .setColor(0x5865f2)
-                .setFooter({
-                    text: "Imperial CZ/SK • Ticket System"
-                })
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.Connect,
+          PermissionFlagsBits.Speak,
         ],
-        components: [row]
-    });
+      });
+    }
+  }
+
+  return overwrites;
 }
 
-/* =========================================================
-   PUNISHMENT PANEL
-========================================================= */
+async function createCategory(guild, name, roles = []) {
+  return guild.channels.create({
+    name,
+    type: ChannelType.GuildCategory,
+    permissionOverwrites: channelPermissions(guild, {
+      roles,
+    }),
+  });
+}
 
-async function sendPunishmentPanel(channel) {
-    const oldMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+async function createText(guild, name, parent, roles = [], topic = "") {
+  return guild.channels.create({
+    name,
+    type: ChannelType.GuildText,
+    parent: parent.id,
+    topic,
+    permissionOverwrites: channelPermissions(guild, {
+      roles,
+    }),
+  });
+}
 
-    if (
-        oldMessages &&
-        oldMessages.some(m =>
-            m.author.id === client.user.id &&
-            m.components.length > 0
-        )
-    ) {
-        return;
-    }
+async function createVoice(guild, name, parent, roles = []) {
+  return guild.channels.create({
+    name,
+    type: ChannelType.GuildVoice,
+    parent: parent.id,
+    permissionOverwrites: channelPermissions(guild, {
+      roles,
+    }),
+  });
+}
 
-    const warnButton = new ButtonBuilder()
-        .setCustomId("punishment_warn")
-        .setLabel("Udělil jsem WARN")
-        .setEmoji("⚠️")
-        .setStyle(ButtonStyle.Secondary);
+async function createRole(guild, name, color = null) {
+  const existing = guild.roles.cache.find(
+    (role) => role.name.toLowerCase() === name.toLowerCase()
+  );
 
-    const banButton = new ButtonBuilder()
-        .setCustomId("punishment_ban")
-        .setLabel("Udělil jsem BAN")
+  if (existing) return existing;
+
+  return guild.roles.create({
+    name,
+    color: color || undefined,
+    reason: "Imperial CZ/SK server setup",
+  });
+}
+
+// ======================================================
+// SETUP
+// ======================================================
+
+async function setupServer(guild) {
+  console.log(`🚀 Spouštím setup serveru: ${guild.name}`);
+
+  // ----------------------------------------------------
+  // ROLE
+  // ----------------------------------------------------
+
+  const roles = {};
+
+  roles.clen = await createRole(guild, "Člen", "#5865F2");
+  roles.admin = await createRole(guild, "Admin", "#E74C3C");
+  roles.mod = await createRole(guild, "Moderátor", "#F1C40F");
+  roles.vedeni = await createRole(guild, "Vedení", "#9B59B6");
+
+  roles.pd = await createRole(guild, "🚔 PD", "#3498DB");
+  roles.hasici = await createRole(guild, "🚒 Hasiči", "#E74C3C");
+  roles.zachranka = await createRole(guild, "🚑 Záchranáři", "#2ECC71");
+  roles.civilista = await createRole(guild, "👤 Civilista", "#95A5A6");
+
+  // ----------------------------------------------------
+  // KATEGORIE
+  // ----------------------------------------------------
+
+  const publicCategory = await createCategory(
+    guild,
+    "📢・INFORMACE",
+    [roles.clen]
+  );
+
+  const selectionCategory = await createCategory(
+    guild,
+    "🎛️・VÝBĚR",
+    [roles.clen]
+  );
+
+  const ticketCategory = await createCategory(
+    guild,
+    "🎫・TICKETY",
+    [roles.admin]
+  );
+
+  const adminCategory = await createCategory(
+    guild,
+    "🛡️・ADMIN TEAM",
+    [roles.admin]
+  );
+
+  const adminCallCategory = await createCategory(
+    guild,
+    "📞・ADMIN CALL",
+    [roles.admin]
+  );
+
+  const leadershipCategory = await createCategory(
+    guild,
+    "👑・VEDENÍ",
+    [roles.vedeni]
+  );
+
+  const punishCategory = await createCategory(
+    guild,
+    "⚠️・TRESTY",
+    [roles.admin]
+  );
+
+  const logsCategory = await createCategory(
+    guild,
+    "📋・LOGY",
+    [roles.admin]
+  );
+
+  const mapCategory = await createCategory(
+    guild,
+    "🗺️・SERVER",
+    [roles.clen]
+  );
+
+  // ----------------------------------------------------
+  // VEŘEJNÉ KANÁLY
+  // ----------------------------------------------------
+
+  const welcome = await createText(
+    guild,
+    "👋・vítej",
+    publicCategory,
+    [roles.clen],
+    "Vítej na oficiálním Imperial CZ/SK Discord serveru."
+  );
+
+  const rules = await createText(
+    guild,
+    "📜・pravidla",
+    publicCategory,
+    [roles.clen],
+    "Pravidla Imperial CZ/SK."
+  );
+
+  const announcements = await createText(
+    guild,
+    "📢・oznámení",
+    publicCategory,
+    [roles.clen],
+    "Oficiální oznámení serveru."
+  );
+
+  const events = await createText(
+    guild,
+    "🎉・eventy",
+    publicCategory,
+    [roles.clen],
+    "Informace o eventech."
+  );
+
+  const rm = await createText(
+    guild,
+    "📣・rm-oznámení",
+    publicCategory,
+    [roles.clen],
+    "Oznámení RM."
+  );
+
+  // ----------------------------------------------------
+  // VÝBĚR
+  // ----------------------------------------------------
+
+  const notificationSelect = await createText(
+    guild,
+    "🔔・výběr-oznámení",
+    selectionCategory,
+    [roles.clen],
+    "Vyber si, která oznámení chceš dostávat."
+  );
+
+  const factionSelect = await createText(
+    guild,
+    "🎖️・výběr-složky",
+    selectionCategory,
+    [roles.clen],
+    "Vyber si PD, Hasiče, Záchranáře nebo Civilistu."
+  );
+
+  // ----------------------------------------------------
+  // TICKETY
+  // ----------------------------------------------------
+
+  const ticketPanel = await createText(
+    guild,
+    "🎫・ticket",
+    ticketCategory,
+    [roles.clen],
+    "Zde si můžeš vytvořit ticket."
+  );
+
+  const ticketAdmin = await createText(
+    guild,
+    "📨・ticket-admin",
+    ticketCategory,
+    [roles.admin],
+    "Admin centrum ticketů."
+  );
+
+  // ----------------------------------------------------
+  // ADMIN CHATY
+  // ----------------------------------------------------
+
+  const adminChat = await createText(
+    guild,
+    "💬・admin-chat",
+    adminCategory,
+    [roles.admin],
+    "Interní komunikace admin týmu."
+  );
+
+  const adminRules = await createText(
+    guild,
+    "📜・admin-pravidla",
+    adminCategory,
+    [roles.admin],
+    "Interní pravidla administrace."
+  );
+
+  const adminLogs = await createText(
+    guild,
+    "📋・admin-log",
+    adminCategory,
+    [roles.admin],
+    "Interní admin log."
+  );
+
+  // ----------------------------------------------------
+  // ADMIN CALL - POUZE AT1, AT2, AT3, AT5, AT6
+  // ----------------------------------------------------
+
+  const at1 = await createRole(guild, "AT1", "#3498DB");
+  const at2 = await createRole(guild, "AT2", "#3498DB");
+  const at3 = await createRole(guild, "AT3", "#3498DB");
+  const at5 = await createRole(guild, "AT5", "#3498DB");
+  const at6 = await createRole(guild, "AT6", "#3498DB");
+
+  await createVoice(guild, "🔊・AT1", adminCallCategory, [
+    roles.admin,
+    at1,
+  ]);
+
+  await createVoice(guild, "🔊・AT2", adminCallCategory, [
+    roles.admin,
+    at2,
+  ]);
+
+  await createVoice(guild, "🔊・AT3", adminCallCategory, [
+    roles.admin,
+    at3,
+  ]);
+
+  await createVoice(guild, "🔊・AT5", adminCallCategory, [
+    roles.admin,
+    at5,
+  ]);
+
+  await createVoice(guild, "🔊・AT6", adminCallCategory, [
+    roles.admin,
+    at6,
+  ]);
+
+  // ----------------------------------------------------
+  // VEDENÍ
+  // ----------------------------------------------------
+
+  await createText(
+    guild,
+    "👑・vedení-chat",
+    leadershipCategory,
+    [roles.vedeni],
+    "Soukromý chat vedení."
+  );
+
+  await createText(
+    guild,
+    "📋・vedení-plány",
+    leadershipCategory,
+    [roles.vedeni],
+    "Plány a rozhodnutí vedení."
+  );
+
+  await createVoice(
+    guild,
+    "🔊・vedení-call",
+    leadershipCategory,
+    [roles.vedeni]
+  );
+
+  // ----------------------------------------------------
+  // TRESTY
+  // ----------------------------------------------------
+
+  const punishmentPanel = await createText(
+    guild,
+    "⚠️・zápis-trestů",
+    punishCategory,
+    [roles.admin],
+    "Panel pro udělování Warnů a Banů."
+  );
+
+  await createText(
+    guild,
+    "⚠️・warn",
+    punishCategory,
+    [roles.admin],
+    "Formulář pro udělení Warnu."
+  );
+
+  await createText(
+    guild,
+    "🔨・ban",
+    punishCategory,
+    [roles.admin],
+    "Formulář pro udělení Banu."
+  );
+
+  // ----------------------------------------------------
+  // LOGY
+  // ----------------------------------------------------
+
+  const warnLog = await createText(
+    guild,
+    "📋・warn-log",
+    logsCategory,
+    [roles.admin],
+    "Automatický zápis všech Warnů."
+  );
+
+  const banLog = await createText(
+    guild,
+    "🔨・ban-log",
+    logsCategory,
+    [roles.admin],
+    "Automatický zápis všech Banů."
+  );
+
+  // ----------------------------------------------------
+  // SERVER
+  // ----------------------------------------------------
+
+  await createText(
+    guild,
+    "🗺️・mapa",
+    mapCategory,
+    [roles.clen],
+    "Mapa Imperial serveru."
+  );
+
+  await createText(
+    guild,
+    "🏠・domy",
+    mapCategory,
+    [roles.clen],
+    "Informace o domech a jejich koupi."
+  );
+
+  // ----------------------------------------------------
+  // EMBEDY
+  // ----------------------------------------------------
+
+  const welcomeEmbed = new EmbedBuilder()
+    .setTitle("🇨🇿🇸🇰 Imperial CZ/SK")
+    .setDescription(
+      "Vítej na oficiálním Discord serveru Imperial CZ/SK!\n\n" +
+      "Vyber si své oznámení a následně svou složku."
+    )
+    .setColor("#5865F2");
+
+  await welcome.send({ embeds: [welcomeEmbed] });
+
+  // ----------------------------------------------------
+  // VÝBĚR OZNÁMENÍ
+  // ----------------------------------------------------
+
+  const notificationMenu = new StringSelectMenuBuilder()
+    .setCustomId("notification_select")
+    .setPlaceholder("🔔 Vyber oznámení")
+    .setMinValues(0)
+    .setMaxValues(3)
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Eventy")
+        .setDescription("Dostávej informace o eventech.")
+        .setValue("eventy")
+        .setEmoji("🎉"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Oznámení")
+        .setDescription("Dostávej důležitá oznámení.")
+        .setValue("oznameni")
+        .setEmoji("📢"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("RM oznámení")
+        .setDescription("Dostávej RM oznámení.")
+        .setValue("rm")
+        .setEmoji("📣")
+    );
+
+  await notificationSelect.send({
+    content:
+      "**🔔 VÝBĚR OZNÁMENÍ**\n\n" +
+      "Vyber si, která oznámení chceš dostávat.",
+    components: [
+      new ActionRowBuilder().addComponents(notificationMenu),
+    ],
+  });
+
+  // ----------------------------------------------------
+  // VÝBĚR SLOŽKY
+  // ----------------------------------------------------
+
+  const factionMenu = new StringSelectMenuBuilder()
+    .setCustomId("faction_select")
+    .setPlaceholder("🎖️ Vyber svou složku")
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Policie")
+        .setDescription("Chci působit u Policie.")
+        .setValue("pd")
+        .setEmoji("🚔"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Hasiči")
+        .setDescription("Chci působit u Hasičů.")
+        .setValue("hasici")
+        .setEmoji("🚒"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Záchranáři")
+        .setDescription("Chci působit u Záchranářů.")
+        .setValue("zachranka")
+        .setEmoji("🚑"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Civilista")
+        .setDescription("Chci hrát jako civilista.")
+        .setValue("civilista")
+        .setEmoji("👤")
+    );
+
+  await factionSelect.send({
+    content:
+      "**🎖️ VÝBĚR SLOŽKY**\n\n" +
+      "Vyber si, za koho chceš na Imperialu hrát.",
+    components: [
+      new ActionRowBuilder().addComponents(factionMenu),
+    ],
+  });
+
+  // ----------------------------------------------------
+  // TICKET PANEL
+  // ----------------------------------------------------
+
+  const ticketMenu = new StringSelectMenuBuilder()
+    .setCustomId("ticket_select")
+    .setPlaceholder("🎫 Vyber typ ticketu")
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Stížnost na admina")
+        .setValue("admin_complaint")
+        .setEmoji("🛡️"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Stížnost na hráče")
+        .setValue("player_complaint")
+        .setEmoji("👤"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Mafie")
+        .setValue("mafia")
+        .setEmoji("🔫"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Žádost o unban")
+        .setValue("unban")
+        .setEmoji("🔓"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Jiný problém")
+        .setValue("other")
+        .setEmoji("❓")
+    );
+
+  await ticketPanel.send({
+    content:
+      "**🎫 TICKET SYSTÉM**\n\n" +
+      "Vyber důvod, proč chceš kontaktovat administraci.",
+    components: [
+      new ActionRowBuilder().addComponents(ticketMenu),
+    ],
+  });
+
+  // ----------------------------------------------------
+  // TRESTY
+  // ----------------------------------------------------
+
+  const punishmentMenu = new StringSelectMenuBuilder()
+    .setCustomId("punishment_select")
+    .setPlaceholder("⚠️ Vyber typ trestu")
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Warn")
+        .setDescription("Udělit hráči Warn.")
+        .setValue("warn")
+        .setEmoji("⚠️"),
+
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Ban")
+        .setDescription("Udělit hráči Ban.")
+        .setValue("ban")
         .setEmoji("🔨")
-        .setStyle(ButtonStyle.Danger);
-
-    await channel.send({
-        embeds: [
-            new EmbedBuilder()
-                .setTitle("⚖️ ZÁPIS TRESTŮ")
-                .setDescription(
-                    "Admin zde zapisuje udělené tresty.\n\n" +
-                    "⚠️ **WARN** – upozornění hráče\n" +
-                    "🔨 **BAN** – ban hráče\n\n" +
-                    "Po dosažení 3 warnů bot upozorní Admin Team."
-                )
-                .setColor(0xed4245)
-        ],
-        components: [
-            new ActionRowBuilder().addComponents(
-                warnButton,
-                banButton
-            )
-        ]
-    });
-}
-
-/* =========================================================
-   TICKET VYTVOŘENÍ
-========================================================= */
-
-async function createTicket(interaction, type) {
-    const guild = interaction.guild;
-
-    const safeName = interaction.user.username
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, "-")
-        .slice(0, 20);
-
-    const existing = guild.channels.cache.find(
-        c => c.name === `ticket-${safeName}`
     );
 
-    if (existing) {
+  await punishmentPanel.send({
+    content:
+      "**⚠️ ZÁPIS TRESTU**\n\n" +
+      "Vyber typ trestu, který chceš řešit.",
+    components: [
+      new ActionRowBuilder().addComponents(punishmentMenu),
+    ],
+  });
+
+  console.log("======================================");
+  console.log("✅ IMPERIAL SERVER SETUP HOTOV");
+  console.log("======================================");
+}
+
+// ======================================================
+// INTERAKCE
+// ======================================================
+
+client.on("interactionCreate", async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === "setup") {
+        if (interaction.user.id !== interaction.guild.ownerId) {
+          return interaction.reply({
+            content: "❌ Tento příkaz může použít pouze majitel serveru.",
+            ephemeral: true,
+          });
+        }
+
+        await interaction.reply({
+          content: "⏳ Vytvářím Imperial server...",
+          ephemeral: true,
+        });
+
+        await setupServer(interaction.guild);
+
+        return interaction.editReply({
+          content: "✅ Imperial server byl vytvořen.",
+        });
+      }
+    }
+
+    if (interaction.isStringSelectMenu()) {
+
+      // -----------------------------------------------
+      // OZNÁMENÍ
+      // -----------------------------------------------
+
+      if (interaction.customId === "notification_select") {
+        const roleMap = {
+          eventy: "Eventy",
+          oznameni: "Oznámení",
+          rm: "RM Oznámení",
+        };
+
+        for (const value of interaction.values) {
+          const role = interaction.guild.roles.cache.find(
+            (r) => r.name === roleMap[value]
+          );
+
+          if (role) {
+            await interaction.member.roles.add(role).catch(() => {});
+          }
+        }
+
         return interaction.reply({
-            content: `❌ Už máš otevřený ticket: ${existing}`,
-            ephemeral: true
+          content: "✅ Tvé nastavení oznámení bylo uloženo.",
+          ephemeral: true,
         });
-    }
-
-    const adminRole = guild.roles.cache.find(
-        r => r.name === CONFIG.roles.ADMIN
-    );
-
-    const managementRole = guild.roles.cache.find(
-        r => r.name === CONFIG.roles.MANAGEMENT
-    );
-
-    const ticketCategory = guild.channels.cache.find(
-        c =>
-            c.type === ChannelType.GuildCategory &&
-            c.name === CONFIG.categoryNames.TICKETS
-    );
-
-    const channel = await guild.channels.create({
-        name: `ticket-${safeName}`,
-        type: ChannelType.GuildText,
-        parent: ticketCategory?.id,
-        permissionOverwrites: [
-            {
-                id: guild.roles.everyone.id,
-                deny: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: interaction.user.id,
-                allow: [
-                    PermissionFlagsBits.ViewChannel,
-                    PermissionFlagsBits.SendMessages,
-                    PermissionFlagsBits.ReadMessageHistory
-                ]
-            },
-            ...(adminRole
-                ? [{
-                    id: adminRole.id,
-                    allow: [
-                        PermissionFlagsBits.ViewChannel,
-                        PermissionFlagsBits.SendMessages,
-                        PermissionFlagsBits.ReadMessageHistory
-                    ]
-                }]
-                : []),
-            ...(managementRole
-                ? [{
-                    id: managementRole.id,
-                    allow: [
-                        PermissionFlagsBits.ViewChannel,
-                        PermissionFlagsBits.SendMessages,
-                        PermissionFlagsBits.ReadMessageHistory
-                    ]
-                }]
-                : [])
-        ]
-    });
-
-    const names = {
-        admin_complaint: "Stížnost na admina",
-        mafia: "Mafie",
-        mafia1: "Mafie 1",
-        mafia2: "Mafie 2",
-        mafia3: "Mafie 3",
-        player_complaint: "Stížnost na hráče",
-        unban: "Žádost o unban",
-        other: "Jiná žádost"
-    };
-
-    const closeButton = new ButtonBuilder()
-        .setCustomId("close_ticket")
-        .setLabel("Uzavřít ticket")
-        .setEmoji("🔒")
-        .setStyle(ButtonStyle.Danger);
-
-    await channel.send({
-        content: `<@${interaction.user.id}>`,
-        embeds: [
-            new EmbedBuilder()
-                .setTitle(`🎫 ${names[type] || "Ticket"}`)
-                .setDescription(
-                    `Vítej v ticketu.\n\n` +
-                    `**Typ:** ${names[type] || "Jiná žádost"}\n\n` +
-                    `Popiš co nejpřesněji svůj problém nebo žádost. ` +
-                    `Admin Team se ti ozve.` 
-                )
-                .setColor(0x5865f2)
-        ],
-        components: [
-            new ActionRowBuilder().addComponents(closeButton)
-        ]
-    });
-
-    await interaction.reply({
-        content: `✅ Ticket vytvořen: ${channel}`,
-        ephemeral: true
-    });
-}
-
-/* =========================================================
-   WARN
-========================================================= */
-
-async function processWarn(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId("warn_modal")
-        .setTitle("⚠️ Zapsat WARN");
-
-    const player = new TextInputBuilder()
-        .setCustomId("roblox_name")
-        .setLabel("Roblox jméno")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(50);
-
-    const reason = new TextInputBuilder()
-        .setCustomId("reason")
-        .setLabel("Důvod WARNu")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(500);
-
-    modal.addComponents(
-        new ActionRowBuilder().addComponents(player),
-        new ActionRowBuilder().addComponents(reason)
-    );
-
-    await interaction.showModal(modal);
-}
-
-/* =========================================================
-   BAN
-========================================================= */
-
-async function processBan(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId("ban_modal")
-        .setTitle("🔨 Zapsat BAN");
-
-    const player = new TextInputBuilder()
-        .setCustomId("roblox_name")
-        .setLabel("Roblox jméno")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(50);
-
-    const days = new TextInputBuilder()
-        .setCustomId("days")
-        .setLabel("Počet dní")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(5);
-
-    const reason = new TextInputBuilder()
-        .setCustomId("reason")
-        .setLabel("Důvod BANu")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(500);
-
-    modal.addComponents(
-        new ActionRowBuilder().addComponents(player),
-        new ActionRowBuilder().addComponents(days),
-        new ActionRowBuilder().addComponents(reason)
-    );
-
-    await interaction.showModal(modal);
-}
-
-/* =========================================================
-   READY
-========================================================= */
-
-client.once(Events.ClientReady, async readyClient => {
-    console.log(`✅ Bot je online jako ${readyClient.user.tag}`);
-
-    try {
-        const guilds = readyClient.guilds.cache;
-
-        for (const [, guild] of guilds) {
-            console.log(`🔧 Nastavuji server: ${guild.name}`);
-
-            const roles = await setupRoles(guild);
-
-            await setupChannels(guild, roles);
-
-            console.log(`✅ Server ${guild.name} je připraven.`);
-        }
-    } catch (error) {
-        console.error("❌ CHYBA PŘI SETUPU:");
-        console.error(error);
-    }
-});
-
-/* =========================================================
-   INTERACTIONS
-========================================================= */
-
-client.on(Events.InteractionCreate, async interaction => {
-
-    try {
-
-        /* -----------------------------
-           SELECT MENU
-        ----------------------------- */
-
-        if (interaction.isStringSelectMenu()) {
-
-            if (interaction.customId === "ticket_type") {
-                await createTicket(
-                    interaction,
-                    interaction.values[0]
-                );
-                return;
-            }
-
-            if (interaction.customId === "notification_select") {
-
-                const selected = interaction.values;
-
-                const roleNames = {
-                    events: "Eventy",
-                    announcements: "Oznámení",
-                    rm: "RM oznámení"
-                };
-
-                let result = selected
-                    .map(x => roleNames[x] || x)
-                    .join(", ");
-
-                await interaction.reply({
-                    content:
-                        `✅ Nastavení oznámení uloženo.\n\n` +
-                        `Vybral/a sis: **${result}**`,
-                    ephemeral: true
-                });
-
-                return;
-            }
-
-            if (interaction.customId === "department_select") {
-
-                const roleMap = {
-                    police: CONFIG.roles.POLICE,
-                    fire: CONFIG.roles.FIRE,
-                    ems: CONFIG.roles.EMS,
-                    civil: CONFIG.roles.CIVIL
-                };
-
-                const roleName = roleMap[interaction.values[0]];
-
-                const role = interaction.guild.roles.cache.find(
-                    r => r.name === roleName
-                );
-
-                const memberRole = interaction.guild.roles.cache.find(
-                    r => r.name === CONFIG.roles.MEMBER
-                );
-
-                if (role) {
-                    await interaction.member.roles.add(role);
-                }
-
-                if (memberRole) {
-                    await interaction.member.roles.add(memberRole);
-                }
-
-                let message;
-
-                if (interaction.values[0] === "police") {
-                    message =
-                        "👮 Vybral/a sis **Policii**.\n\n" +
-                        "Dostal/a jsi roli **Člen**. " +
-                        "Později zde bot může automaticky poslat pozvánku na server Policie.";
-                }
-
-                if (interaction.values[0] === "fire") {
-                    message =
-                        "🚒 Vybral/a sis **Hasiče**.\n\n" +
-                        "Dostal/a jsi roli **Člen**. " +
-                        "Později zde bot může automaticky poslat pozvánku na server Hasičů.";
-                }
-
-                if (interaction.values[0] === "ems") {
-                    message =
-                        "🚑 Vybral/a sis **Záchranku**.\n\n" +
-                        "Dostal/a jsi roli **Člen**. " +
-                        "Později zde bot může automaticky poslat pozvánku na server Záchranky.";
-                }
-
-                if (interaction.values[0] === "civil") {
-                    message =
-                        "👤 Vybral/a sis **Civilistu**.\n\n" +
-                        "Dostal/a jsi roli **Člen**.";
-                }
-
-                await interaction.reply({
-                    content: `✅ ${message}`,
-                    ephemeral: true
-                });
-
-                return;
-            }
-        }
-
-        /* -----------------------------
-           BUTTONS
-        ----------------------------- */
-
-        if (interaction.isButton()) {
-
-            if (interaction.customId === "punishment_warn") {
-
-                const adminRole = interaction.guild.roles.cache.find(
-                    r => r.name === CONFIG.roles.ADMIN
-                );
-
-                const managementRole = interaction.guild.roles.cache.find(
-                    r => r.name === CONFIG.roles.MANAGEMENT
-                );
-
-                if (
-                    !interaction.member.roles.cache.has(adminRole?.id) &&
-                    !interaction.member.roles.cache.has(managementRole?.id)
-                ) {
-                    return interaction.reply({
-                        content: "❌ Tento formulář je pouze pro Admin Team a Vedení.",
-                        ephemeral: true
-                    });
-                }
-
-                await processWarn(interaction);
-                return;
-            }
-
-            if (interaction.customId === "punishment_ban") {
-
-                const adminRole = interaction.guild.roles.cache.find(
-                    r => r.name === CONFIG.roles.ADMIN
-                );
-
-                const managementRole = interaction.guild.roles.cache.find(
-                    r => r.name === CONFIG.roles.MANAGEMENT
-                );
-
-                if (
-                    !interaction.member.roles.cache.has(adminRole?.id) &&
-                    !interaction.member.roles.cache.has(managementRole?.id)
-                ) {
-                    return interaction.reply({
-                        content: "❌ Tento formulář je pouze pro Admin Team a Vedení.",
-                        ephemeral: true
-                    });
-                }
-
-                await processBan(interaction);
-                return;
-            }
-
-            if (interaction.customId === "close_ticket") {
-
-                const channel = interaction.channel;
-
-                await interaction.reply({
-                    content: "🔒 Ticket bude uzavřen za 3 sekundy."
-                });
-
-                setTimeout(async () => {
-                    await channel.delete().catch(() => {});
-                }, 3000);
-
-                return;
-            }
-        }
-
-        /* -----------------------------
-           MODALS
-        ----------------------------- */
-
-        if (interaction.isModalSubmit()) {
-
-            if (interaction.customId === "warn_modal") {
-
-                const robloxName =
-                    interaction.fields.getTextInputValue("roblox_name");
-
-                const reason =
-                    interaction.fields.getTextInputValue("reason");
-
-                const warnChannel = interaction.guild.channels.cache.find(
-                    c => c.name === "⚠️・warny"
-                );
-
-                if (!warnChannel) {
-                    return interaction.reply({
-                        content: "❌ Kanál ⚠️・warny nebyl nalezen.",
-                        ephemeral: true
-                    });
-                }
-
-                const embed = new EmbedBuilder()
-                    .setTitle("⚠️ NOVÝ WARN")
-                    .addFields(
-                        {
-                            name: "👤 Roblox hráč",
-                            value: robloxName
-                        },
-                        {
-                            name: "🛡️ Udělil",
-                            value: `<@${interaction.user.id}>`
-                        },
-                        {
-                            name: "📋 Důvod",
-                            value: reason
-                        }
-                    )
-                    .setColor(0xf1c40f)
-                    .setTimestamp();
-
-                await warnChannel.send({
-                    embeds: [embed]
-                });
-
-                await interaction.reply({
-                    content:
-                        `✅ WARN pro **${robloxName}** byl zapsán do ${warnChannel}.`,
-                    ephemeral: true
-                });
-
-                return;
-            }
-
-            if (interaction.customId === "ban_modal") {
-
-                const robloxName =
-                    interaction.fields.getTextInputValue("roblox_name");
-
-                const days =
-                    interaction.fields.getTextInputValue("days");
-
-                const reason =
-                    interaction.fields.getTextInputValue("reason");
-
-                const banChannel = interaction.guild.channels.cache.find(
-                    c => c.name === "🔨・bany"
-                );
-
-                if (!banChannel) {
-                    return interaction.reply({
-                        content: "❌ Kanál 🔨・bany nebyl nalezen.",
-                        ephemeral: true
-                    });
-                }
-
-                const embed = new EmbedBuilder()
-                    .setTitle("🔨 NOVÝ BAN")
-                    .addFields(
-                        {
-                            name: "👤 Roblox hráč",
-                            value: robloxName
-                        },
-                        {
-                            name: "🛡️ Udělil",
-                            value: `<@${interaction.user.id}>`
-                        },
-                        {
-                            name: "⏱️ Délka",
-                            value: `${days} dní`
-                        },
-                        {
-                            name: "📋 Důvod",
-                            value: reason
-                        }
-                    )
-                    .setColor(0xe74c3c)
-                    .setTimestamp();
-
-                await banChannel.send({
-                    embeds: [embed]
-                });
-
-                await interaction.reply({
-                    content:
-                        `✅ BAN pro **${robloxName}** byl zapsán do ${banChannel}.`,
-                    ephemeral: true
-                });
-
-                return;
-            }
-        }
-
-    } catch (error) {
-
-        console.error("❌ Interaction error:", error);
-
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({
-                content: "❌ Nastala chyba. Zkontroluj Railway logs.",
-                ephemeral: true
-            }).catch(() => {});
-        }
-    }
-});
-
-/* =========================================================
-   PŘÍKAZY
-========================================================= */
-
-client.on(Events.MessageCreate, async message => {
-
-    if (message.author.bot) return;
-
-    if (message.content === "!panel") {
-
-        const memberRole = message.guild.roles.cache.find(
-            r => r.name === CONFIG.roles.MEMBER
+      }
+
+      // -----------------------------------------------
+      // SLOŽKA
+      // -----------------------------------------------
+
+      if (interaction.customId === "faction_select") {
+        const roleMap = {
+          pd: "🚔 PD",
+          hasici: "🚒 Hasiči",
+          zachranka: "🚑 Záchranáři",
+          civilista: "👤 Civilista",
+        };
+
+        const selected = interaction.values[0];
+        const selectedRole = interaction.guild.roles.cache.find(
+          (r) => r.name === roleMap[selected]
         );
 
-        const menu = new StringSelectMenuBuilder()
-            .setCustomId("department_select")
-            .setPlaceholder("👥 Vyber svou složku")
-            .addOptions([
-                {
-                    label: "Policie",
-                    value: "police",
-                    emoji: "👮"
-                },
-                {
-                    label: "Hasiči",
-                    value: "fire",
-                    emoji: "🚒"
-                },
-                {
-                    label: "Záchranka",
-                    value: "ems",
-                    emoji: "🚑"
-                },
-                {
-                    label: "Civilista",
-                    value: "civil",
-                    emoji: "👤"
-                }
-            ]);
+        const memberRole = interaction.guild.roles.cache.find(
+          (r) => r.name === "Člen"
+        );
 
-        const notificationMenu = new StringSelectMenuBuilder()
-            .setCustomId("notification_select")
-            .setPlaceholder("📢 Vyber oznámení")
-            .setMinValues(0)
-            .setMaxValues(3)
-            .addOptions([
-                {
-                    label: "Eventy",
-                    value: "events",
-                    emoji: "🎉"
-                },
-                {
-                    label: "Oznámení",
-                    value: "announcements",
-                    emoji: "📢"
-                },
-                {
-                    label: "RM oznámení",
-                    value: "rm",
-                    emoji: "🚨"
-                }
-            ]);
+        if (selectedRole) {
+          await interaction.member.roles.add(selectedRole).catch(() => {});
+        }
 
-        await message.channel.send({
-            embeds: [
-                new EmbedBuilder()
-                    .setTitle("🌐 IMPERIAL CZ/SK")
-                    .setDescription(
-                        "Vítej na hlavním serveru Imperial CZ/SK.\n\n" +
-                        "### 👥 Vyber si svou složku\n" +
-                        "Vyber Policii, Hasiče, Záchranku nebo Civilistu.\n\n" +
-                        "### 📢 Oznámení\n" +
-                        "Můžeš si vybrat, která oznámení chceš dostávat.\n\n" +
-                        "Pokud zvolíš některou složku IZS, dostaneš také roli **Člen**."
-                    )
-                    .setColor(0x5865f2)
-            ],
-            components: [
-                new ActionRowBuilder().addComponents(menu),
-                new ActionRowBuilder().addComponents(notificationMenu)
-            ]
+        if (memberRole) {
+          await interaction.member.roles.add(memberRole).catch(() => {});
+        }
+
+        return interaction.reply({
+          content:
+            "✅ Role byla přidána.\n\n" +
+            "Pokud jsi vybral složku IZS, další část bude pokračovat na příslušném serveru.",
+          ephemeral: true,
         });
+      }
 
-        return;
-    }
+      // -----------------------------------------------
+      // TICKET
+      // -----------------------------------------------
 
-    if (message.content === "!setup") {
+      if (interaction.customId === "ticket_select") {
+        return interaction.reply({
+          content:
+            "🎫 Ticket systém je připraven.\n" +
+            "Další část následně vytvoří samotný ticket kanál.",
+          ephemeral: true,
+        });
+      }
 
-        const owner = message.guild.ownerId === message.author.id;
+      // -----------------------------------------------
+      // TREST
+      // -----------------------------------------------
 
-        const adminRole = message.guild.roles.cache.find(
-            r => r.name === CONFIG.roles.ADMIN
-        );
-
-        const managementRole = message.guild.roles.cache.find(
-            r => r.name === CONFIG.roles.MANAGEMENT
-        );
-
-        const isStaff =
-            owner ||
-            message.member.roles.cache.has(adminRole?.id) ||
-            message.member.roles.cache.has(managementRole?.id);
-
-        if (!isStaff) {
-            return message.reply(
-                "❌ `!setup` může použít pouze Vedení nebo vlastník serveru."
-            );
+      if (interaction.customId === "punishment_select") {
+        if (!interaction.member.roles.cache.some(
+          (r) => r.name === "Admin" || r.name === "Vedení"
+        ) && interaction.user.id !== interaction.guild.ownerId) {
+          return interaction.reply({
+            content: "❌ Na tento systém nemáš oprávnění.",
+            ephemeral: true,
+          });
         }
 
-        await message.reply("🔧 Spouštím kompletní setup serveru...");
-
-        try {
-            const roles = await setupRoles(message.guild);
-            await setupChannels(message.guild, roles);
-
-            await message.channel.send(
-                "✅ **SETUP DOKONČEN.**\n\n" +
-                "Role, kategorie, kanály, práva, ticket panel a trestní systém jsou připravené."
-            );
-
-        } catch (error) {
-
-            console.error(error);
-
-            await message.channel.send(
-                "❌ Setup se nepodařilo dokončit.\n" +
-                "Podívej se do Railway Logs."
-            );
-        }
+        return interaction.reply({
+          content:
+            interaction.values[0] === "warn"
+              ? "⚠️ Zvolen WARN. Formulář doplníme v další části."
+              : "🔨 Zvolen BAN. Formulář doplníme v další části.",
+          ephemeral: true,
+        });
+      }
     }
+  } catch (error) {
+    console.error("❌ Chyba interaction:", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "❌ Nastala chyba.",
+        ephemeral: true,
+      }).catch(() => {});
+    }
+  }
 });
 
-/* =========================================================
-   LOGIN
-========================================================= */
+// ======================================================
+// READY
+// ======================================================
 
-client.login(TOKEN).catch(error => {
-    console.error("❌ Bot se nepodařilo přihlásit:");
-    console.error(error);
+client.once("ready", async () => {
+  console.log(`✅ Bot je online jako ${client.user.tag}`);
+
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("setup")
+      .setDescription("Vytvoří celý Imperial CZ/SK server."),
+  ].map((command) => command.toJSON());
+
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+  try {
+    await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
+      { body: commands }
+    );
+
+    console.log("✅ Slash příkaz /setup byl zaregistrován.");
+  } catch (error) {
+    console.error("❌ Nepodařilo se zaregistrovat /setup:", error);
+  }
 });
+
+// ======================================================
+// LOGIN
+// ======================================================
+
+client.login(TOKEN);
