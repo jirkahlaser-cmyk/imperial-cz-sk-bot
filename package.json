@@ -1,12 +1,11 @@
 {
   "name": "imperial-cz-sk-bot",
   "version": "1.0.0",
-  "description": "Imperial CZ/SK Discord Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.21.0"
+    "discord.js": "^14.22.1"
   }
 }
